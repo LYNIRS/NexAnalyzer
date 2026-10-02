@@ -315,6 +315,15 @@ class OpticalParams:
 
     `ff_divisor` is a **divisor**, not a sigma: the flat-field blur runs at
     max(H, W) / ff_divisor, so a larger number means a *smaller* sigma.
+
+    `marker_margin_sigma`, `marker_min_distance`, and `mask_closing_radius`
+    are not part of `_KWARGS` and never reach `analyse_frame`/`classify()` --
+    they tune `domain_size.measure_domains()`'s watershed pass instead,
+    domain-size-only settings layered on top of the same segmentation. Kept
+    on this dataclass rather than a new one because they are still per
+    material and layer (a thin, faint 1L flake and a bolder 2L flake can need
+    different marker sensitivity, spacing, or edge closing), which is exactly
+    what this dataclass already exists to carry.
     """
 
     nsigma: Optional[float] = None
@@ -335,6 +344,32 @@ class OpticalParams:
     #: first, because the derivation needs every frame and `analyse_frame`
     #: sees one at a time.
     adaptive_threshold: Optional[bool] = None
+    #: How many sigma_noise past a class's own boundary a watershed marker
+    #: must clear -- lower catches weaker, flatter domains at the risk of
+    #: more noise-driven markers. `None` means
+    #: `domain_size.MARKER_MARGIN_SIGMA` (0.5). Not passed to `analyse_frame`
+    #: either (as_kwargs skips it too): it never reaches `classify()`, only
+    #: `measure_domains()`.
+    marker_margin_sigma: Optional[float] = None
+    #: Minimum pixel separation between two accepted watershed markers. `None`
+    #: means `domain_size.DEFAULT_MARKER_MIN_DISTANCE` (8), the value the
+    #: "above" path was validated against for VBBF46 -- raise it for a
+    #: material whose flakes show internal reflection highlights bright
+    #: enough to be watershed-split into several markers (and so several
+    #: domains) instead of staying one. Not passed to `analyse_frame` either:
+    #: like `marker_margin_sigma`, it only tunes `measure_domains()`.
+    marker_min_distance: Optional[int] = None
+    #: Morphological-closing radius (pixels) applied to the domain-size target
+    #: mask before connected-component/marker/watershed. `None` means
+    #: `domain_size.DEFAULT_MASK_CLOSING_RADIUS` (0, off) -- the mask is used
+    #: exactly as `classify()` produced it. Raise it for a material whose
+    #: flakes' ragged, noisy real edges are leaving small fringe fragments
+    #: disconnected from the flake's main body, each counted as its own
+    #: domain sitting right at or inside the real flake's footprint. Not
+    #: passed to `analyse_frame` either: like the two fields above, it only
+    #: tunes `measure_domains()`. Too large a radius starts merging
+    #: genuinely separate close-together small flakes into one.
+    mask_closing_radius: Optional[int] = None
 
     @property
     def adaptive_enabled(self) -> bool:
@@ -404,6 +439,18 @@ class OpticalParams:
             value = getattr(self, name)
             if value is not None and not (0.5 <= value <= 50.0):
                 errors.append(f"{name} {value} out of range [0.5, 50.0] %")
+        if self.marker_margin_sigma is not None and not (0.0 <= self.marker_margin_sigma <= 5.0):
+            errors.append(
+                f"marker_margin_sigma {self.marker_margin_sigma} out of range [0.0, 5.0]"
+            )
+        if self.marker_min_distance is not None and not (1 <= self.marker_min_distance <= 200):
+            errors.append(
+                f"marker_min_distance {self.marker_min_distance} out of range [1, 200]"
+            )
+        if self.mask_closing_radius is not None and not (0 <= self.mask_closing_radius <= 10):
+            errors.append(
+                f"mask_closing_radius {self.mask_closing_radius} out of range [0, 10]"
+            )
         if self.adaptive_threshold and (below is None or above is None):
             errors.append(
                 "adaptive_threshold needs abs_threshold_below and "
@@ -415,7 +462,9 @@ class OpticalParams:
         """Only the fields that are set; absent means "algorithm default"."""
         return {
             name: getattr(self, name)
-            for name in tuple(self._KWARGS) + self._ABS_FIELDS + ("adaptive_threshold",)
+            for name in tuple(self._KWARGS) + self._ABS_FIELDS
+            + ("adaptive_threshold", "marker_margin_sigma", "marker_min_distance",
+               "mask_closing_radius")
             if getattr(self, name) is not None
         }
 

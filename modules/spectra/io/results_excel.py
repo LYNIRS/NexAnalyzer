@@ -2,7 +2,7 @@
 The QC Report's numbers as one workbook: every point's fitted peaks, every
 segmented frame, plus the summary the report's pages show.
 
-Five sheets, two audiences:
+Up to six sheets, two audiences:
 
 - ``Summary`` is the summary page's tables — per-peak mean ± std for each
   technique, the intensity ratios, and any point that failed to fit — for
@@ -13,6 +13,10 @@ Five sheets, two audiences:
   says which point was the 0.4.
 - ``OM_Stats`` and ``OM_Points`` are the same pair for the optical
   segmentation: three class rows, and the frame behind each of those averages.
+- ``Domain_Size``, present only when domain-size analysis ran, is the pooled
+  flake-diameter stats the summary page's domain table also shows — one row,
+  or two (small, large) when the sample's domains split into size
+  populations. See `DomainSizeStat` and `domain_size.split_size_populations`.
 
 One workbook rather than a workbook plus four CSVs, which is what the two
 merged pages wrote between them until v5.0.0. Two of those CSVs were
@@ -47,7 +51,7 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-from core.report.models import RAW_STAT_LABEL, PeakStat
+from core.report.models import RAW_STAT_LABEL, DomainSizeStat, PeakStat
 from modules.optical.io import frame_tables
 
 from ..processing.peak_metrics import peak_intensity_and_stderr, raw_peak_stats
@@ -350,6 +354,62 @@ def _add_optical_sheets(wb: Workbook, frames: Sequence, threshold=None) -> None:
         ws.auto_filter.ref = ws.dimensions
 
 
+def _domain_columns(split: bool) -> Sequence[_Column]:
+    columns = [_Column("Population", None, 12)] if split else []
+    columns += [
+        _Column("Domains_N", "0", 12),
+        _Column("Frames_N", "0", 10),
+        _Column("Diameter_Median", "0.00", 16),
+        _Column("Diameter_Mean", "0.00", 15),
+        _Column("Diameter_Std", "0.00", 14),
+        _Column("Unit", None, 8),
+        _Column("Density_per_100um2", "0.00", 18),
+    ]
+    return columns
+
+
+def _add_domain_sheet(
+    wb: Workbook, stat: Optional[DomainSizeStat], class_label: Optional[str] = None
+) -> None:
+    """``Domain_Size``, or nothing when domain-size analysis did not run (no
+    OM frames, or the checkbox was off) -- same convention as `_add_optical_sheets`.
+
+    Tidy, numeric columns rather than the PDF table's formatted "mean ± std"
+    string, matching this module's own stated split: the report page shows
+    the read-friendly number, the workbook carries the plottable one. One row
+    when the sample's domains didn't split into two size populations, two
+    (small, large) when `domain_size.split_size_populations` found a ≥2x gap
+    in the pooled diameters -- see `DomainSizeStat.populations`.
+    """
+    if stat is None or stat.n_domains == 0:
+        return
+
+    ws = wb.create_sheet(title="Domain_Size")
+    start_row = 1
+    if class_label:
+        caption = "Domain size (equivalent circular diameter)"
+        ws.cell(row=1, column=1, value=f"{caption} — {class_label}").font = _HEADING_FONT
+        start_row = 3
+
+    columns = _domain_columns(split=bool(stat.populations))
+    if stat.populations:
+        rows = [
+            [pop.label.capitalize(), pop.n, stat.n_frames,
+             pop.diameter_median, pop.diameter_mean, pop.diameter_std, stat.unit,
+             pop.density_per_100um2]
+            for pop in stat.populations
+        ]
+    else:
+        rows = [[
+            stat.n_domains, stat.n_frames,
+            stat.diameter_median, stat.diameter_mean, stat.diameter_std, stat.unit,
+            stat.density_per_100um2,
+        ]]
+    _write_table(ws, columns, rows, start_row=start_row)
+    _set_widths(ws, columns)
+    ws.freeze_panes = f"A{start_row + 1}"
+
+
 def _add_summary_sheet(
     wb: Workbook,
     sample_name: str,
@@ -421,12 +481,14 @@ def build_sample_results_xlsx(
     techniques: Sequence[TechniqueResults] = (),
     optical_frames: Sequence = (),
     optical_threshold=None,
+    domain_stat: Optional[DomainSizeStat] = None,
+    domain_class_label: Optional[str] = None,
     show_fwhm_v1: bool = False,
 ) -> bytes:
     """
     The sample's results as .xlsx bytes: a `Summary` sheet, one per-point sheet
-    for each technique that produced fits, and the two optical sheets when the
-    segmentation ran.
+    for each technique that produced fits, the two optical sheets when the
+    segmentation ran, and a `Domain_Size` sheet when domain-size analysis ran.
 
     The identity arguments mirror the summary figure's, so the workbook and the
     report pages written beside it name the same sample, material and date.
@@ -436,6 +498,11 @@ def build_sample_results_xlsx(
     segmentation than the PNG saved next to it. `optical_threshold` is the
     `AdaptivePair` that produced them, or None when the preset pair ran
     unchanged; it lands on every `OM_Stats` row.
+
+    `domain_stat`/`domain_class_label` mirror `build_summary_figure`'s own
+    arguments of the same name -- the pooled `DomainSizeStat`, and the OM
+    class its domains were split from. None (no domain-size analysis ran)
+    omits the `Domain_Size` sheet entirely rather than writing an empty one.
 
     `show_fwhm_v1` adds FWHM_v1/FWHM_v1_Stderr to each per-point sheet and
     FWHM_v1_Mean/FWHM_v1_Std to the Summary sheet — the pre-v3.4.0
@@ -458,6 +525,7 @@ def build_sample_results_xlsx(
     for technique in techniques:
         _add_data_sheet(wb, technique, show_fwhm_v1)
     _add_optical_sheets(wb, optical_frames, optical_threshold)
+    _add_domain_sheet(wb, domain_stat, domain_class_label)
 
     buffer = BytesIO()
     wb.save(buffer)

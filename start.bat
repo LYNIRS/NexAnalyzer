@@ -46,7 +46,11 @@ if not exist ".git" (
 
 :: Fast-forward only: if local work has diverged, fail cleanly and keep the
 :: current version rather than creating a merge commit.
-git pull --ff-only
+:: Pinned to "origin main" explicitly rather than a bare "git pull" -- a bare
+:: pull follows whatever branch.main.remote happens to be set to, and that can
+:: silently drift to a different remote (e.g. a personal fork added later),
+:: which makes updates go quiet with no error.
+git pull --ff-only origin main
 if errorlevel 1 goto :update_failed
 echo Up to date with the latest version.
 echo.

@@ -87,6 +87,21 @@ class TestClassLabels:
     def test_unknown_layer_word_passes_through(self):
         assert layer_word("7L") == "7L"
 
+    def test_low_coverage_relabels_the_reference_as_substrate(self):
+        """A sparse-nucleation sample's majority pixel population is bare
+        substrate, not the named film -- classify() always calls the
+        majority "the reference" regardless of what ref_label says, so
+        low_coverage tells the labels to say substrate instead."""
+        assert class_labels("1L", low_coverage=True) == (
+            "Below Substrate", "Substrate", "Monolayer"
+        )
+        assert class_labels("2L", low_coverage=True) == (
+            "Below Substrate", "Substrate", "Bilayer"
+        )
+
+    def test_low_coverage_defaults_off(self):
+        assert class_labels("2L") == class_labels("2L", low_coverage=False)
+
 
 class TestFrameGeometry:
     def test_a_full_frame_is_not_mistaken_for_a_circular_aperture(self, tmp_path):
@@ -180,6 +195,24 @@ class TestAnalyseFrame:
         assert frame.original.shape == frame.overlay.shape
         assert frame.valid.shape == frame.original.shape[:2]
         assert frame.hist_centers.shape == frame.hist_counts.shape
+
+    def test_low_coverage_relabels_the_frame_without_changing_the_segmentation(
+        self, tmp_path
+    ):
+        """Only `labels` differs -- low_coverage never reaches `analyse`, so
+        the actual pixel classification (and everything derived from it)
+        must be identical either way."""
+        path = _synthetic_frame(tmp_path)
+        plain = analyse_frame(path, point=3, ref_label="1L", name="50x-3")
+        low_cov = analyse_frame(
+            path, point=3, ref_label="1L", name="50x-3", low_coverage=True
+        )
+
+        assert low_cov.labels == ("Below Substrate", "Substrate", "Monolayer")
+        assert low_cov.percentages == plain.percentages
+        assert low_cov.contrast_below == plain.contrast_below
+        assert low_cov.contrast_above == plain.contrast_above
+        assert np.array_equal(low_cov.overlay, plain.overlay)
 
     def test_the_overlay_tints_only_classified_pixels(self, tmp_path):
         frame = analyse_frame(_synthetic_frame(tmp_path), point=1, ref_label="2L")

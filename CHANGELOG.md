@@ -5,6 +5,184 @@ All notable changes to NexAnalyzer will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.6.1] - 2026-10-02
+
+### Changed
+
+- **Nucleation density is now reported per (100 µm)² instead of per µm²**
+  (`domain_size.DENSITY_AREA_UM2`), everywhere 5.6.0 added it — the figure,
+  the summary table, the xlsx `Domain_Size` sheet's `Density_per_100um2`
+  column (renamed from `Density_um2`), and the on-screen caption. A rate per
+  one µm² is a fraction far below one for any real sample; scaled up to a
+  block size an operator can picture, the same numbers read as whole-ish
+  numbers instead. `DomainSizeStat.density_per_100um2` and
+  `SizePopulationStat.density_per_100um2` replace the old `density_um2`
+  fields (`area_um2` itself is unchanged — still the real analyzed area in
+  µm²). Also switched the display format from 3 significant figures to a
+  fixed one decimal place: `.3g` existed only to stop a small population's
+  density rounding to "0.00" under the old, much smaller per-µm² numbers,
+  and would have rendered the new, larger ones in scientific notation
+  instead (e.g. "2.96e+03") for no reason, now that the scale change alone
+  keeps every value readable.
+
+## [5.6.0] - 2026-10-01
+
+### Added
+
+- **Nucleation density** — domain count over the frame's own analyzed area,
+  reported as flakes/µm² (and per population — small/large each get their
+  own — when the split is on). Area is `valid.sum() * um_per_px²`, the same
+  calibration every other domain-size number already uses; no new preset
+  field. Shown everywhere domain size already is: each frame's own panel and
+  the sample-level title on the domain-size figure (each on its own new
+  line — a combined "small: X/µm² · large: Y/µm²" line was wide enough to
+  bleed into the next panel's own label before it was split in two), a new
+  "Density (/µm²)" column on the summary page's table, a new `Density_um2`
+  column on the xlsx `Domain_Size` sheet, and the on-screen caption.
+  Omitted, not invented, when the sample isn't calibrated — a density in
+  1/px² isn't comparable across magnifications.
+- **"Split into small/large size populations" is now a checkbox on the QC
+  Report page**, next to "Measure domain size," off by default and
+  remembered per installation (`report_settings.json`, same mechanism as the
+  domain-size checkbox itself). The split (added in 5.5.0) had been firing
+  on frames with no real second population at all — pure background texture
+  with enough size spread to clear the ≥2x ratio test on its own — so
+  running it unconditionally meant trusting every result without a way to
+  turn it off. `detect_size_populations` (the new argument on
+  `measure_domains()`/`domain_size_stat()`) short-circuits the split call
+  entirely when off, not just discards its result.
+- **Watershed mask edge smoothing is now a per-material/per-layer preset
+  field**, `OpticalParams.mask_closing_radius` (mirroring
+  `marker_min_distance`/`marker_margin_sigma`, off/0 by default).
+  `classify()`'s per-pixel threshold reproduces a flake's real, noisy edge as
+  a ragged boundary rather than a clean line; wherever that raggedness opens
+  a small gap, the domain on the far side becomes its own separately-counted
+  domain sitting right at or inside the real flake's footprint. Raising the
+  radius applies a morphological closing to the target mask before
+  connected-component/marker/watershed, bridging small gaps so a fringe
+  fragment is measured as part of its parent flake instead. Both new fields
+  are now editable on the Material Presets page, alongside
+  `marker_margin_sigma` — `marker_min_distance` had been added in 5.5.0 as a
+  preset field but was never wired into that page's own editing form, so the
+  only way to set it was hand-editing `materials.json`.
+
+## [5.5.0] - 2026-09-22
+
+### Added
+
+- **Domain-size analysis now separates a sample's flakes into a small and a
+  large size population when they genuinely differ by at least 2x**, instead
+  of reporting one pooled mean that blends two real, differently-sized
+  populations into a number that describes neither (found on a real sample:
+  a few ~micron-scale flakes among an excess of sub-micron ones — a
+  continuous, unimodal spread and a genuine two-population sample look
+  different on a density plot, not just by eye). `domain_size
+  .split_size_populations()` looks for a valley in a Gaussian KDE over
+  `log10(diameter)` rather than the single biggest gap between adjacent
+  sorted diameters — that check is dominated by the sparse tail's random
+  spacing on real (noisy) data and misses a genuine valley that still has a
+  few points scattered through it. Below `MIN_DOMAINS_FOR_SPLIT` (20) domains,
+  or when no valley clears the 2x ratio, it reports one population exactly as
+  before — this is a strict addition, not a change to the ordinary case.
+  When the QC Report page's own "Split into small/large size populations"
+  checkbox (added in 5.6.0) is on, each frame's domain-size figure colours
+  that frame's own two populations separately (small/large) when that
+  frame's own domains split, and falls back to today's single-colour look
+  otherwise; the summary page's table and the on-screen caption instead use
+  one consistent split computed from the whole sample's pooled diameters,
+  which is what the `Domain_Size` xlsx sheet also reads.
+- **Domain size reaches the xlsx export for the first time**, as a new
+  `Domain_Size` sheet — one row normally, two (`Small`/`Large`) when the
+  sample's domains split. Previously only the on-screen figure and the
+  PDF-style summary table carried this number; the workbook had none of it.
+- **Watershed marker spacing is now a per-material/per-layer preset field**,
+  `OpticalParams.marker_min_distance` (mirroring `marker_margin_sigma`
+  exactly), rather than the fixed module constant
+  `domain_size.DEFAULT_MARKER_MIN_DISTANCE` (8, unchanged as the default — the
+  value the "above" path was validated against for VBBF46). Raise it for a
+  material whose flakes show internal reflection highlights bright enough to
+  be watershed-split into several markers, and so several domains, instead of
+  staying one — which is also what a real size-population split needs to see
+  past: oversplitting one large flake into same-sized-as-noise fragments
+  smears its true size down into the small population's range and can hide
+  a real gap entirely.
+
+## [5.4.0] - 2026-09-20
+
+### Added
+
+- **The QC Report measures flake domain size, as its own numbered figure and
+  a summary-page table.** "4 — Domain size analysis" sits between OM
+  diagnostic and the (renumbered 5-8) Raman/PL figures, splitting one of
+  `classify()`'s three OM classes into individual flakes via watershed, using
+  each flake's own optical extremum (a reflection highlight, or for a
+  below-reference class its own darkest point) as its marker. **Which class
+  is operator's choice** — below reference / reference / above reference, the
+  same three `contrast.class_labels()` already names on the OM table, shown
+  as a selector once the checkbox below is on; it shares the existing
+  reference-layer choice rather than triggering a second segmentation pass.
+  Size is reported as equivalent circular diameter, `2*sqrt(area/pi)`, pooled
+  across a sample's frames into a median and mean ± std on the summary page.
+  A domain touching the analysed region's border is excluded — its true size
+  is unknown, not zero. It is opt-in: a checkbox on the QC Report page, off
+  by default and remembered per installation in `report_settings.json`,
+  since the measurement re-runs a segmentation-equivalent pass per frame and
+  roughly doubles optical analysis time.
+- **A new, editable µm/px calibration, keyed by magnification.** Domain size
+  is reported in physical units only once a magnification has a calibration
+  entered on the Material Presets page; before that it honestly reports
+  pixels rather than inventing a number. Magnification, not material, is the
+  key — a 50x objective's field of view doesn't depend on what's under it.
+  Stored in the new, committed `data/om_calibration.json` (`core/io/om_calibration.py`),
+  separate from the existing per-installation `report_settings.json`. The
+  lookup is case-insensitive: a folder's magnification prefix is read
+  verbatim from its filenames (`sample_scanner`'s "any other prefix"), so
+  "50X" on disk and "50x" typed into the calibration table must still match,
+  the way `default_magnification` already treats them as the same
+  magnification — a mismatch silently fell back to pixel units with no error.
+- `scikit-image` is now a dependency, for the domain split's watershed and
+  local-maximum marker search.
+- **A raw OM component with no point clearing the watershed marker floor now
+  survives as one domain instead of vanishing.** Previously a flat,
+  low-contrast component — common outside the sparse-nucleation samples the
+  method was validated against — produced zero markers and was silently
+  dropped from the count entirely, undercounting badly against the OM class
+  table's own (floor-free) component count. One fallback marker per
+  un-marked component, at its own extremum regardless of the floor, fixes
+  this without touching components that already had a real marker.
+- **The marker floor's sensitivity is now a per-material/per-layer preset
+  field**, `OpticalParams.marker_margin_sigma` (edited on the Material
+  Presets page as "domain marker sensitivity (σ)"), rather than the fixed
+  module constant `domain_size.MARKER_MARGIN_SIGMA`. `None` (unset, the
+  default) keeps today's 0.5; lower it when real domains are being missed
+  because they're too flat to clear the default floor. Domain-size-only —
+  never reaches `analyse_frame`/`classify()`, so it cannot change the OM
+  segmentation itself.
+- **A "Low coverage" checkbox on the QC Report page**, for sparse-nucleation
+  samples (a WSe2 1L wafer that's mostly bare substrate, say). `classify()`
+  always calls the frame's most common pixel value "the reference" — the
+  chosen reference layer is purely a label, never part of the threshold math
+  — so on a substrate-majority sample the substrate itself was always
+  reading as "1L" and the real 1L flakes as "Above 1L". Ticking the checkbox
+  relabels the classes "Below Substrate" / "Substrate" / the named film
+  (e.g. "Monolayer") instead, without touching the segmentation itself —
+  same masks, same tuning, only `contrast.class_labels()`'s wording changes,
+  which the OM table, the OM figure's own title, and the domain-size class
+  selector all inherit for free. Still two populations underneath: it
+  doesn't separate a thicker layer from the named one if both sit above
+  substrate in the same frame.
+
+## [5.3.1] - 2026-09-20
+
+### Fixed
+
+- **The launcher's auto-update pulls from `origin` explicitly, not whatever
+  the branch happens to track.** `start.bat` ran a bare `git pull --ff-only`,
+  which follows `branch.main.remote` -- and that can silently drift to a
+  different remote (a personal fork added later, say) without any error. The
+  pull then "succeeds" against the wrong repo every launch, reporting
+  up to date while the real repo moves on. Pinned to `git pull --ff-only origin main`.
+
 ## [5.3.0] - 2026-09-19
 
 ### Added

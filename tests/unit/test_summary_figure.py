@@ -25,10 +25,17 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 
-from core.report.models import RAW_STAT_LABEL, OpticalClassStat, PeakStat  # noqa: E402
+from core.report.models import (  # noqa: E402
+    RAW_STAT_LABEL,
+    DomainSizeStat,
+    OpticalClassStat,
+    PeakStat,
+    SizePopulationStat,
+)
 from core.report.summary_figure import (  # noqa: E402
     FIT_COLUMN_ASPECT_RATIO,
     FIT_GRID_COLUMNS,
+    _add_domain_table,
     _add_fit_legend,
     _add_om_note,
     _add_placeholder,
@@ -381,6 +388,137 @@ class TestBuildSummaryFigure:
         )
 
         assert png[:8] == _PNG_MAGIC
+
+    def test_domain_stat_none_still_renders(self):
+        """No domain-size analysis ran (or found nothing) -- a placeholder
+        box, not a missing page section."""
+        png = build_summary_figure(
+            sample_name="HADG06", material_name="WSe2", report_date="2026-09-18",
+            om_classes=_classes(),
+        )
+
+        assert png[:8] == _PNG_MAGIC
+
+    def test_a_domain_stat_changes_the_page(self):
+        no_table = build_summary_figure(
+            sample_name="HADG06", material_name="WSe2", report_date="2026-09-18",
+            om_classes=_classes(),
+        )
+        with_table = build_summary_figure(
+            sample_name="HADG06", material_name="WSe2", report_date="2026-09-18",
+            om_classes=_classes(), domain_stat=_domain_stat(),
+        )
+
+        assert no_table[:8] == with_table[:8] == _PNG_MAGIC
+        assert no_table != with_table
+
+
+def _domain_stat(unit="µm", calibrated=True):
+    return DomainSizeStat(
+        n_domains=42, n_frames=9,
+        diameter_median=3.1, diameter_mean=3.3, diameter_std=0.6,
+        unit=unit, calibrated=calibrated,
+    )
+
+
+class TestAddDomainTable:
+    """`_add_domain_table` owns the placeholder-vs-table choice and the
+    uncalibrated note -- checked directly rather than only through a rendered
+    page, matching `TestThresholdNote`'s own pattern for its sibling caption."""
+
+    def _drawn_texts(self, stat, class_label=None, include_table_cells=False):
+        fig = plt.figure(figsize=(13.333, 7.5))
+        _add_domain_table(fig, stat, left=0.1, top=0.5, w=0.3, h=0.1,
+                          class_label=class_label)
+        # `_text` (captions/notes) draws onto `fig` directly and lands in
+        # `fig.texts`; `_draw_table`'s own cells draw onto the table's own
+        # child Axes instead, so reading table content needs `ax.texts` too.
+        texts = [t.get_text() for t in fig.texts]
+        if include_table_cells:
+            texts += [t.get_text() for ax in fig.axes for t in ax.texts]
+        plt.close(fig)
+        return texts
+
+    def test_none_draws_a_placeholder_not_a_table(self):
+        texts = self._drawn_texts(None)
+
+        assert not any("Domains (n)" in t for t in texts)
+
+    def test_zero_domains_draws_a_placeholder_too(self):
+        stat = DomainSizeStat(
+            n_domains=0, n_frames=0,
+            diameter_median=0.0, diameter_mean=0.0, diameter_std=0.0,
+            unit="µm", calibrated=True,
+        )
+        texts = self._drawn_texts(stat)
+
+        assert not any("Domains (n)" in t for t in texts)
+
+    def test_calibrated_stat_omits_the_pixel_note(self):
+        texts = self._drawn_texts(_domain_stat(calibrated=True))
+
+        assert not any("pixels" in t for t in texts)
+
+    def test_uncalibrated_stat_shows_the_pixel_note(self):
+        texts = self._drawn_texts(_domain_stat(unit="px", calibrated=False))
+
+        assert any("pixels" in t for t in texts)
+
+    def test_class_label_is_appended_to_the_caption(self):
+        texts = self._drawn_texts(_domain_stat(), class_label="Bilayer")
+
+        assert any("Bilayer" in t for t in texts)
+
+    def test_no_class_label_leaves_the_plain_caption(self):
+        texts = self._drawn_texts(_domain_stat(), class_label=None)
+
+        assert any(t == "Domain size (equivalent circular diameter)" for t in texts)
+
+    def test_an_unsplit_stat_has_no_size_column(self):
+        texts = self._drawn_texts(_domain_stat(), include_table_cells=True)
+        assert not any(t == "Size" for t in texts)
+
+    def test_a_split_stat_draws_both_populations(self):
+        stat = _domain_stat()._replace(
+            populations=(
+                SizePopulationStat("small", 745, 10.22, 12.13, 5.58),
+                SizePopulationStat("large", 57, 66.44, 70.83, 17.72),
+            ),
+        )
+        texts = self._drawn_texts(stat, include_table_cells=True)
+
+        assert any("Small" in t for t in texts)
+        assert any("Large" in t for t in texts)
+        assert any("745" in t for t in texts)
+        assert any("57" in t for t in texts)
+        # The pooled single-row numbers must not appear instead.
+        assert not any(t == "42" for t in texts)
+
+    def test_calibrated_stat_shows_a_density_value(self):
+        stat = _domain_stat()._replace(density_per_100um2=150.0)
+        texts = self._drawn_texts(stat, include_table_cells=True)
+
+        assert any("Density" in t for t in texts)
+        assert any("150" in t for t in texts)
+
+    def test_uncalibrated_stat_shows_a_dash_for_density(self):
+        stat = _domain_stat(unit="px", calibrated=False)
+        assert stat.density_per_100um2 is None
+        texts = self._drawn_texts(stat, include_table_cells=True)
+
+        assert any(t == "—" for t in texts)
+
+    def test_split_stat_shows_both_populations_densities(self):
+        stat = _domain_stat()._replace(
+            populations=(
+                SizePopulationStat("small", 745, 10.22, 12.13, 5.58, density_per_100um2=2960.0),
+                SizePopulationStat("large", 57, 66.44, 70.83, 17.72, density_per_100um2=35.9),
+            ),
+        )
+        texts = self._drawn_texts(stat, include_table_cells=True)
+
+        assert any("2960.0" in t for t in texts)
+        assert any("35.9" in t for t in texts)
 
 
 class TestFitGridLegend:

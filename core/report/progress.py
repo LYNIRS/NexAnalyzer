@@ -26,6 +26,15 @@ guesswork. What is not guesswork is the shape: segmentation is far and away
 the longest stage, and a bar that doesn't say so is the lie this module exists
 to prevent.
 
+`domain_size`'s weight is a third kind of number: not measured at all, unlike
+its two siblings above. Domain-size analysis re-runs a segmentation-equivalent
+`analyse_array()` pass per frame (this codebase's actual, current cost) plus
+watershed marker-finding on top, so its weight is set equal to
+`optical_segmentation`'s own — "at least as expensive as segmentation, plausibly
+more" — as an explicit placeholder pending a real measurement, not a rounded
+guess dressed up as one. Replace it the first time this stage's real wall time
+is known.
+
 Don't flatten them to equal shares. Equal weights would put the bar at 50%
 when 78% of the time is still ahead, which is the same lie in a different
 shape. If the pipeline changes materially, re-measure rather than estimate.
@@ -67,6 +76,7 @@ STAGES: Sequence[Stage] = (
     Stage("optical_adaptive", "Deriving the threshold pair", 0.078),
     Stage("optical_segmentation", "Segmenting optical frames", 0.390),
     Stage("om_figures", "Rendering OM figures", 0.155),
+    Stage("domain_size", "Measuring domain size", 0.390),
     Stage("fit", "Fitting spectra", 0.082),
     Stage("raman_figures", "Rendering Raman figures", 0.093),
     Stage("pl_figures", "Rendering PL figures", 0.103),
@@ -85,6 +95,7 @@ sample's share; a run fitting more spectra scales it up from here.
 def stages_for(
     *, has_raman: bool, has_pl: bool, has_optical: bool,
     has_segmentation: bool = True, has_adaptive: bool = False,
+    has_domain_size: bool = True,
     fit_spectra: Optional[int] = None,
 ) -> List[Stage]:
     """The stages a run will actually perform, in order.
@@ -103,6 +114,10 @@ def stages_for(
     weight by the spectrum count keeps one weight set honest for both shapes.
     Leave it None for the single-spectrum-per-point case the weights were
     measured on.
+
+    `has_domain_size` is the operator's own opt-in choice, not a fact about
+    the sample the way `has_optical`/`has_segmentation` are -- default True
+    so a caller that hasn't been updated for the flag keeps today's behavior.
     """
     keep = {
         "optical_images": has_optical,
@@ -114,6 +129,7 @@ def stages_for(
         "optical_adaptive": has_optical and has_segmentation and has_adaptive,
         "optical_segmentation": has_optical and has_segmentation,
         "om_figures": has_optical and has_segmentation,
+        "domain_size": has_optical and has_segmentation and has_domain_size,
         "fit": has_raman or has_pl,
         "raman_figures": has_raman,
         "pl_figures": has_pl,
@@ -275,6 +291,7 @@ def build(
     has_optical: bool,
     has_segmentation: bool = True,
     has_adaptive: bool = False,
+    has_domain_size: bool = True,
     fit_spectra: Optional[int] = None,
 ) -> Optional[ReportProgress]:
     """A `ReportProgress` for a run with these techniques, or None if there is
@@ -289,6 +306,7 @@ def build(
         has_optical=has_optical,
         has_segmentation=has_segmentation,
         has_adaptive=has_adaptive,
+        has_domain_size=has_domain_size,
         fit_spectra=fit_spectra,
     )
     if not stages:

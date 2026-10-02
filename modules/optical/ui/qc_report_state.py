@@ -28,6 +28,19 @@ def initialize_qc_report_state() -> None:
             "magnification": None,
             "material": None,
             "reference_layer": "2L",
+            # True relabels the reference class "Substrate" and the brighter
+            # class as the named film -- see contrast.class_labels().
+            "low_coverage": False,
+            # None until resolved from report_settings.load_measure_domain_size.
+            "measure_domain_size": None,
+            # Which of classify()'s three classes to split into domains --
+            # "below" | "reference" | "above"; see domain_size.TARGETS.
+            "domain_target": "above",
+            # None until resolved from report_settings.load_split_size_populations.
+            # Gates domain_size.measure_domains()/domain_size_stat()'s own
+            # detect_size_populations argument -- off by default since the
+            # split has fired on frames with no real second population at all.
+            "split_size_populations": None,
             # Everything below is derived and must appear in one of the
             # artifact tuples; see _SELECTIONS.
             "batch_result": None,
@@ -39,6 +52,9 @@ def initialize_qc_report_state() -> None:
             "om_diagnostic_png": None,    # Figure 3, with the histogram row
             "optical_threshold": None,    # adaptive.AdaptivePair, or None
             "optical_fingerprint": None,
+            "domain_results": None,       # list[domain_size.DomainResult]
+            "domain_stat": None,          # models.DomainSizeStat, or None
+            "domain_grid_png": None,      # Figure 4, the domain-size grid
             "raman_stats": None,
             "raman_ratios": None,         # [(label, (median, mad, n))]
             "raman_grid_png": None,       # Figure 4, the nine fitted spectra
@@ -67,7 +83,10 @@ def get_qc_report_state() -> dict:
 #: from them and gets dropped by `reset_results`; a derived key missing from
 #: the tuples below outlives the run that produced it, which is how a verdict
 #: naming the previous material comes to sit under the new one's results.
-_SELECTIONS = ("folder", "scan", "magnification", "material", "reference_layer")
+_SELECTIONS = (
+    "folder", "scan", "magnification", "material", "reference_layer",
+    "low_coverage", "measure_domain_size", "domain_target", "split_size_populations",
+)
 
 #: Built from *every* input, so any change at all invalidates them. They are
 #: also the cheap ones — the overview page is a second of matplotlib and the
@@ -79,7 +98,7 @@ _COMPOSITE_ARTIFACTS = ("batch_result", "report_date", "summary_png", "xlsx_byte
 #: Derived keys, grouped by the preset block whose settings produced them.
 _OPTICAL_ARTIFACTS = (
     "frames", "om_png", "om_diagnostic_png", "optical_threshold",
-    "optical_fingerprint",
+    "optical_fingerprint", "domain_results", "domain_stat", "domain_grid_png",
 )
 _RAMAN_ARTIFACTS = (
     "raman_stats", "raman_ratios", "raman_grid_png", "raman_stats_png",

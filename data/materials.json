@@ -32,13 +32,14 @@
             "color": "#9467bd"
           }
         ],
-        "exclusion_ranges": "375-390; 400-415"
+        "exclusion_ranges": "375-390; 400-415",
+        "max_iterations": 2000
       }
     },
     {
       "material_name": "Silicon",
       "enabled": true,
-      "description": "Silicon reference peak at 520 cm⁻¹",
+      "description": "Silicon reference peak at 520 cm\u207b\u00b9",
       "raman": {
         "x_range_enabled": false,
         "x_min": null,
@@ -58,7 +59,8 @@
             "color": "#2ca02c"
           }
         ],
-        "exclusion_ranges": null
+        "exclusion_ranges": null,
+        "max_iterations": 2000
       }
     },
     {
@@ -67,19 +69,19 @@
       "description": "WSe2 Raman / WSe2 PL peaks. The optical block carries the -6.0/+4.25 contrast pair, which the adaptive derivation uses as its base unless a preset opts out with adaptive_threshold: false.",
       "raman": {
         "x_range_enabled": true,
-        "x_min": 6.0,
-        "x_max": 400.0,
-        "despike_threshold": 8.0,
+        "x_min": 200.0,
+        "x_max": 300.0,
+        "despike_threshold": 30.0,
         "baseline_algorithm": "ALS",
         "baseline_degree": null,
         "baseline_lambda": 50000.0,
-        "baseline_p": 0.02,
+        "baseline_p": 0.005,
         "peak_templates": [
           {
             "peak_label": "E2g+A1g",
             "center": 250.0,
             "center_tolerance": 7.0,
-            "width_fwhm": 4.0,
+            "width_fwhm": 3.0,
             "shape": 0.3,
             "color": "#EF482E"
           },
@@ -132,7 +134,8 @@
             "color": "#3276EC"
           }
         ],
-        "exclusion_ranges": null
+        "exclusion_ranges": null,
+        "max_iterations": 14000
       },
       "pl": {
         "x_range_enabled": false,
@@ -161,9 +164,19 @@
             "color": "#9467bd"
           }
         ],
-        "exclusion_ranges": "650-880"
+        "exclusion_ranges": "650-880",
+        "max_iterations": 2000
       },
       "optical": {
+        "1L": {
+          "nsigma": 3.0,
+          "minpx": 3,
+          "abs_threshold_below": 6.0,
+          "abs_threshold_above": 4.2,
+          "marker_margin_sigma": 0.5,
+          "marker_min_distance": 80,
+          "mask_closing_radius": 0
+        },
         "2L": {
           "nsigma": 4.0,
           "minpx": 3,

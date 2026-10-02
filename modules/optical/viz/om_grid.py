@@ -285,7 +285,7 @@ def build_om_grid_figure(
         )
         fig.suptitle(
             f"{sample_name} — OM{magnification_label} layer segmentation "
-            f"({len(frames)} positions, {frames[0].ref_label} reference)\n{coverage}",
+            f"({len(frames)} positions, {frames[0].labels[1]} reference)\n{coverage}",
             fontsize=_FS_SUPTITLE, fontweight="bold",
         )
 
