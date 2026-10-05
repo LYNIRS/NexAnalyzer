@@ -327,7 +327,7 @@ def create_unified_figure(spectrum: SpectrumFile, layer_config: Optional[Dict[st
                 y=spectrum.fit_result.total_fit_curve,  # Y values from sum of all peak components
                 mode="lines",  # Connected line
                 name="Fit Total",  # Legend label
-                line=dict(color=FIT_TOTAL_COLOR, width=1.5, dash=FIT_TOTAL_DASH),  # Black dashed, as in the report
+                line=dict(color=FIT_TOTAL_COLOR, width=2.5, dash=FIT_TOTAL_DASH),  # Black solid, as in the report
                 visible=layer_config.get("fit_total", False)  # Hidden until fit stage
             ))
 

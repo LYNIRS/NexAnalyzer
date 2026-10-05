@@ -46,11 +46,11 @@ def initialize_session_state():
     # `value=` parameter) so the checkboxes never pass `value=` themselves —
     # otherwise Streamlit warns whenever this state was already written
     # earlier in the same run (e.g. by sync_pending_file_switch()).
-    if "show_raw" not in st.session_state:
-        st.session_state["show_raw"] = True
-    for _key in ("show_despiked", "show_corrected", "show_fit", "show_components", "show_residuals"):
+    # The starting set is the fitted-spectrum view (v5.12.0; raw-only before),
+    # the one a finished fit derives anyway.
+    for _key, _on in VIEW_OPTION_DEFAULTS.items():
         if _key not in st.session_state:
-            st.session_state[_key] = False
+            st.session_state[_key] = _on
 
 
 VIEW_OPTION_KEYS = (
@@ -61,6 +61,16 @@ VIEW_OPTION_KEYS = (
     "show_components",
     "show_residuals",
 )
+
+#: Where the View Options start in a new session: the fitted-spectrum view.
+VIEW_OPTION_DEFAULTS = {
+    "show_raw": False,
+    "show_despiked": False,
+    "show_corrected": True,
+    "show_fit": True,
+    "show_components": True,
+    "show_residuals": True,
+}
 
 # Session key holding the set of View Options the user has set by hand.
 VIEW_OPTIONS_PINNED_KEY = "_view_options_pinned"

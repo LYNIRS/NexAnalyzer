@@ -5,6 +5,34 @@ All notable changes to NexAnalyzer will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.12.0] - 2026-10-05
+
+### Added
+
+- **`2ZA(M)` in the `WSe2` preset** (244.2 cm-1, +/-4, FWHM 4), for the
+  shoulder on the low side of E2g+A1g; the band is De Luca et al.'s Table 1
+  244.2 peak, as in `WSe2 extended`. **WSe2's numbers move**: E2g+A1g no
+  longer absorbs the shoulder, so its FWHM narrows and its center can shift.
+  Its +/-7 window overlaps 2ZA(M)'s, so on spectra without a shoulder 2ZA(M)
+  may fit near zero.
+
+### Changed
+
+- **`WSe2` and `WSe2 extended` Raman**, edited on the Material Presets page:
+  x range 6-400 -> 200-300, ALS baseline p 0.02 -> 0.005, max_iterations
+  2000 -> 10000. **Numbers move.** With 200-300, B2g, LA, LB, C and center
+  (and `WSe2 extended`'s LA and LO2(K)-ZA(K)) lie outside the fitted range,
+  so their values, and the LA/E2g+A1g ratio, are not meaningful there.
+- **The Fit Total line is solid black, not dashed.** The style is shared, so
+  this applies to the Spectra page plot and the exported fit figures alike. On
+  the Spectra page it is also 1 px wider (1.5 -> 2.5). The components keep
+  their own colors, so black alone tells the fit apart from them. Display
+  only: no numbers move.
+- **View Options start on the fitted-spectrum view**: Show Baseline-corrected,
+  Fit, Components and Residuals on; Raw and De-spiked off (was Raw only). This
+  is the set a finished fit already derives; earlier stages still pick their
+  own layers until you set one by hand.
+
 ## [5.11.0] - 2026-10-03
 
 ### Added

@@ -120,13 +120,13 @@
       "description": "WSe2 Raman / WSe2 PL peaks. The optical block carries the -6.0/+4.25 contrast pair, and every wafer is segmented on it -- one ruler, so two wafers' coverage numbers can be compared.",
       "raman": {
         "x_range_enabled": true,
-        "x_min": 6.0,
-        "x_max": 400.0,
+        "x_min": 200.0,
+        "x_max": 300.0,
         "despike_threshold": 100.0,
         "baseline_algorithm": "ALS",
         "baseline_degree": null,
         "baseline_lambda": 50000.0,
-        "baseline_p": 0.02,
+        "baseline_p": 0.005,
         "peak_templates": [
           {
             "peak_label": "E2g+A1g",
@@ -143,6 +143,14 @@
             "width_fwhm": 4.0,
             "shape": 0.3,
             "color": "#D5EF2E"
+          },
+          {
+            "peak_label": "2ZA(M)",
+            "center": 244.2,
+            "center_tolerance": 4.0,
+            "width_fwhm": 4.0,
+            "shape": 0.3,
+            "color": "#FF7F0E"
           },
           {
             "peak_label": "B2g",
@@ -186,7 +194,7 @@
           }
         ],
         "exclusion_ranges": null,
-        "max_iterations": 2000
+        "max_iterations": 10000
       },
       "pl": {
         "x_range_enabled": false,
@@ -233,13 +241,13 @@
       "description": "WSe2 with the monolayer multi-phonon peaks of De Luca et al., arXiv:1910.12503, Table 1 (experimental frequencies, column 1): the 208-270 cm-1 bands, plus the broad LA band split into LA (130.5, the *LA(M) zone-edge mode) and LO2(K)-ZA(K) (137.4). E2g+A1g and 2LA are WSe2's own. LA/E2g+A1g here uses the narrow 130.5 peak, so it is not comparable to WSe2's ratio. Optical block as WSe2.",
       "raman": {
         "x_range_enabled": true,
-        "x_min": 6.0,
-        "x_max": 400.0,
+        "x_min": 200.0,
+        "x_max": 300.0,
         "despike_threshold": 100.0,
         "baseline_algorithm": "ALS",
         "baseline_degree": null,
         "baseline_lambda": 50000.0,
-        "baseline_p": 0.02,
+        "baseline_p": 0.005,
         "peak_templates": [
           {
             "peak_label": "E2g+A1g",
@@ -403,7 +411,7 @@
           }
         ],
         "exclusion_ranges": null,
-        "max_iterations": 2000
+        "max_iterations": 10000
       },
       "pl": {
         "x_range_enabled": false,

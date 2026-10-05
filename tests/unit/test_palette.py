@@ -56,16 +56,17 @@ class TestBothPlottersShareOnePalette:
         assert traces["Total Fit"].line.dash == palette.FIT_TOTAL_DASH
         assert traces["Residuals"].marker.color == palette.RESIDUAL_COLOR
 
-    def test_the_total_fit_is_dashed_and_the_components_are_not(self):
-        """The two lines sit on top of each other for most of their length, so
-        the dash is what tells them apart."""
+    def test_the_total_fit_is_solid_black_and_the_components_are_colored(self):
+        """The two lines sit on top of each other for most of their length; since
+        v5.12.0 both are solid, so the fit's black is what tells them apart."""
         x = np.array([0.0, 1.0, 2.0])
         fig = fit_plot.plot_composite(
             x, np.array([0.0, 1.0, 0.0]), _Fit(), mode="Raman", show_components=True,
         )
         traces = _traces_by_name(fig)
 
-        assert traces["Total Fit"].line.dash == "dash"
+        assert traces["Total Fit"].line.dash == "solid"
+        assert traces["Total Fit"].line.color == "#000000"
         assert traces["Exciton"].line.dash == palette.COMPONENT_DASH
         assert palette.COMPONENT_DASH is None  # i.e. solid
         assert traces["Exciton"].opacity == palette.COMPONENT_OPACITY
