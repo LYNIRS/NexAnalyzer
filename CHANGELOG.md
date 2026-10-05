@@ -5,6 +5,28 @@ All notable changes to NexAnalyzer will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.12.1] - 2026-10-05
+
+### Changed
+
+- **`2ZA(M)` starts at 2.0 cm-1 FWHM (was 4.0) in `WSe2` and
+  `WSe2_truncate`.** The fitter bounds a width to 0.5-3x its start, so this
+  caps 2ZA(M)'s Voigt FWHM at ~4.9 cm-1. At 4.0 the cap was ~9.8 and 2ZA(M)
+  sat on it in over 75% of TSMC_May spectra, acting as a broad base that
+  took E2g+A1g's low-side wing; capped, it fits at 4.4-4.8 cm-1 centred
+  243-244, the De Luca 244.2 band. **WSe2's numbers move**: on TSMC_May the
+  E2g+A1g FWHM median rises ~0.3-0.4 cm-1 against the 4.0 start (e.g.
+  TSM260500 4.08 -> 4.41).
+- **`WSe2` Raman x range is -5 to 500** (was 200-300 at v5.12.0), edited on the
+  Material Presets page, so LA, B2g, LB, C and center are fitted on data again
+  and the LA/E2g+A1g ratio is meaningful.
+
+### Added
+
+- **A `WSe2_truncate` preset**: `WSe2` with the Raman window at 200-300 cm-1,
+  for the E2g+A1g / 2LA / 2ZA(M) region only. Peaks outside the window are
+  carried but meaningless there. Added on the Material Presets page.
+
 ## [5.12.0] - 2026-10-05
 
 ### Added
