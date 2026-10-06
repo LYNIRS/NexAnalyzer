@@ -227,6 +227,15 @@
         "max_iterations": 2000
       },
       "optical": {
+        "1L": {
+          "nsigma": 3.0,
+          "minpx": 3,
+          "abs_threshold_below": 6.0,
+          "abs_threshold_above": 4.2,
+          "marker_margin_sigma": 0.5,
+          "marker_min_distance": 80,
+          "mask_closing_radius": 0
+        },
         "2L": {
           "nsigma": 4.0,
           "minpx": 3,
@@ -348,15 +357,6 @@
         "max_iterations": 2000
       },
       "optical": {
-        "1L": {
-          "nsigma": 3.0,
-          "minpx": 3,
-          "abs_threshold_below": 6.0,
-          "abs_threshold_above": 4.2,
-          "marker_margin_sigma": 0.5,
-          "marker_min_distance": 80,
-          "mask_closing_radius": 0
-        },
         "2L": {
           "nsigma": 4.0,
           "minpx": 3,
