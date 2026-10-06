@@ -290,3 +290,27 @@ class TestAFailedRunDoesNotDiscardTheOldFit:
         assert "no Raman settings" in result["error_message"]
         assert spectrum.fit_done
         assert [peak.area for peak in spectrum.fit_result.fitted_peaks] == areas
+
+
+class TestTheBaselineIsKept:
+    """The "Peaks on Background" view (v5.13.0) adds the baseline back under
+    the fit; that is only the measured spectrum if the stored baseline is the
+    one subtracted, in the scale it was subtracted in."""
+
+    def test_corrected_plus_background_is_the_despiked_spectrum(self):
+        from modules.spectra.processing.despiking import remove_spikes
+
+        spectrum = _make_spectrum()
+        preset = _mos2_like()
+        despiked, _ = remove_spikes(spectrum.raw_data.Y, threshold=preset.raman.despike_threshold)
+
+        execute_auto_workflow(spectrum, preset)
+
+        np.testing.assert_allclose(spectrum.processed_data.Y + spectrum.background, despiked)
+
+    def test_skipping_the_baseline_leaves_none(self):
+        spectrum = _make_spectrum()
+        execute_auto_workflow(spectrum, _mos2_like())
+        execute_auto_workflow(spectrum, _mos2_like(baseline_algorithm="None (Skip)"))
+
+        assert spectrum.background is None

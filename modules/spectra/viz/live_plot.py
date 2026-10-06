@@ -33,11 +33,14 @@ User can override defaults via "View Options" checkboxes in control panel.
 
 # ==================== IMPORTS ====================
 import plotly.graph_objects as go  # Plotly graphing library (creates interactive plots)
+from plotly.subplots import make_subplots
 import streamlit as st  # Streamlit web framework (provides session_state, UI widgets)
 from typing import Optional, Dict  # Type hints for function parameters/returns
+import numpy as np
 from ..models.spectrum import SpectrumFile  # SpectrumFile dataclass (contains all spectrum data + metadata)
 from ..ui.session_state import set_view_options
 from .palette import (
+    BACKGROUND_COLOR,
     COMPONENT_DASH,
     COMPONENT_OPACITY,
     PROCESSED_COLOR,
@@ -137,7 +140,8 @@ def compute_default_visibility(spectrum: SpectrumFile) -> Dict[str, bool]:
         "baseline_corrected": False,  # Purple line - data after baseline subtraction (confirmed)
         "fit_total": False,  # Black line - sum of all fitted peak components
         "components": False,  # Colored dashed lines - individual Voigt peak components
-        "residuals": False  # Scatter - baseline-corrected minus fit total
+        "residuals": False,  # Scatter - baseline-corrected minus fit total
+        "on_background": False,  # Data, fit and components lifted onto the subtracted baseline
     }
 
     # Apply visibility rules based on processing stage
@@ -156,6 +160,7 @@ def compute_default_visibility(spectrum: SpectrumFile) -> Dict[str, bool]:
         # fitted file showed components depended on which writer ran last.
         visibility["components"] = True  # Colored dashed - individual Voigt peaks
         visibility["residuals"] = True  # Scatter - fit quality at a glance
+        visibility["on_background"] = True  # Peaks sit on the background, as fitted
         # WHY: User wants to see how well the fit matches the corrected data (R² evaluation)
     elif despike_preview_active:
         visibility["raw"] = True
@@ -182,6 +187,26 @@ def compute_default_visibility(spectrum: SpectrumFile) -> Dict[str, bool]:
     # ELSE: Default visibility (all False) shows only raw data when first loaded
 
     return visibility  # Return dictionary mapping layer names to visibility booleans
+
+
+def background_offset(spectrum: SpectrumFile, layer_config: Dict[str, bool]) -> Optional[np.ndarray]:
+    """
+    The baseline to add back under the fitted layers, or None to draw them on zero.
+
+    Only for a successful fit with its baseline on record: the view exists to
+    show peaks sitting on their background, and a file fitted before v5.13.0
+    (or a project saved then) has no stored background to sit them on. A length
+    mismatch would mean the background describes some other `processed_data`,
+    so that falls back too rather than raising.
+    """
+    if not layer_config.get("on_background", False):
+        return None
+    if not (spectrum.fit_result is not None and spectrum.fit_result.success):
+        return None
+    background = getattr(spectrum, "background", None)
+    if background is None or len(background) != len(spectrum.processed_data.X):
+        return None
+    return np.asarray(background)
 
 
 def create_unified_figure(spectrum: SpectrumFile, layer_config: Optional[Dict[str, bool]] = None) -> go.Figure:
@@ -216,14 +241,33 @@ def create_unified_figure(spectrum: SpectrumFile, layer_config: Optional[Dict[st
     if layer_config is None:
         layer_config = compute_default_visibility(spectrum)
 
-    # Create empty Plotly Figure object - we'll add traces (data layers) to this
-    fig = go.Figure()
+    # Residuals get their own panel below (v5.13.0), as in Quick Export: on
+    # the "Peaks on Background" view the data sit hundreds of counts above
+    # zero, and residuals sharing that axis squashed the peaks to a sliver.
+    # Their own Y scale also keeps a small misfit readable. The X axis is
+    # shared, so zooming one panel zooms both.
+    residual_panel = bool(
+        layer_config.get("residuals", False)
+        and spectrum.fit_result is not None and spectrum.fit_result.success
+        and getattr(spectrum.fit_result, "residuals", None) is not None
+    )
+    if residual_panel:
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                            row_heights=[0.75, 0.25], vertical_spacing=0.04)
+    else:
+        fig = go.Figure()
 
     # Determine axis labels based on spectroscopy mode
     # Raman: X-axis is wavenumber shift from laser (cm⁻¹)
     # PL (Photoluminescence): X-axis is emission wavelength (nm)
     x_label = "Raman Shift (cm⁻¹)" if spectrum.mode == "Raman" else "Wavelength (nm)"
     y_label = "Intensity (a.u.)"  # Arbitrary units - not calibrated to absolute intensity
+
+    # "Peaks on Background": the baseline is added back under the data, the
+    # fit and the components (not the residuals, which stay about zero), so
+    # the peaks are seen on the background they were separated from.
+    background = background_offset(spectrum, layer_config)
+    offset = background if background is not None else 0.0
 
     # ==================== LAYER 1: RAW DATA ====================
     # Add raw data as first trace (always present - this is the original file data)
@@ -279,11 +323,13 @@ def create_unified_figure(spectrum: SpectrumFile, layer_config: Optional[Dict[st
         # Data source: spectrum.processed_data (despiked data with baseline subtracted)
         # Baseline algorithms: Polynomial, ALS, Rolling Ball, Spline, or airPLS
         # WHY: After baseline removal, data is ready for peak fitting (background fluorescence removed)
+        # Drawn on the background, these are the de-spiked data again, and
+        # the legend says so rather than calling them baseline-corrected.
         fig.add_trace(go.Scatter(
             x=spectrum.processed_data.X,  # X values unchanged by baseline correction
-            y=spectrum.processed_data.Y,  # Y values with baseline subtracted (may have negative values)
+            y=spectrum.processed_data.Y + offset,  # Baseline subtracted, or added back on the background view
             mode="markers",  # Connected line
-            name="Baseline-corrected",  # Legend label
+            name="Baseline-corrected" if background is None else "Data",  # Legend label
             # Purple, distinct from the orange de-spiked line above it, and the
             # color the report draws this same series in. Set on the marker
             # because that is what this trace renders: with mode="markers", a
@@ -324,7 +370,7 @@ def create_unified_figure(spectrum: SpectrumFile, layer_config: Optional[Dict[st
             # WHY: User compares this to baseline-corrected data to evaluate fit quality (R²)
             fig.add_trace(go.Scatter(
                 x=spectrum.processed_data.X,  # Use same X as corrected data (fit domain)
-                y=spectrum.fit_result.total_fit_curve,  # Y values from sum of all peak components
+                y=spectrum.fit_result.total_fit_curve + offset,  # Sum of all peak components
                 mode="lines",  # Connected line
                 name="Fit Total",  # Legend label
                 line=dict(color=FIT_TOTAL_COLOR, width=2.5, dash=FIT_TOTAL_DASH),  # Black solid, as in the report
@@ -351,7 +397,7 @@ def create_unified_figure(spectrum: SpectrumFile, layer_config: Optional[Dict[st
                         # WHY: User can see contribution of each peak to total fit (e.g., D vs G-band ratio)
                         fig.add_trace(go.Scatter(
                             x=spectrum.processed_data.X,  # Same X as fit total
-                            y=peak.component_curve,  # Y values for this single Voigt peak
+                            y=peak.component_curve + offset,  # This single Voigt peak, on the background if shown
                             mode="lines",  # Connected line
                             name=peak_label,  # Legend shows peak label (e.g., "D-band")
                             line=dict(color=peak_color, width=2.5, dash=COMPONENT_DASH),  # Solid; the total fit is the dashed one
@@ -359,27 +405,38 @@ def create_unified_figure(spectrum: SpectrumFile, layer_config: Optional[Dict[st
                             visible=True  # Always visible when components layer is enabled
                         ))
 
+    # ==================== LAYER 7.2: BACKGROUND ====================
+    # The subtracted baseline, on the "Peaks on Background" view. Part of the
+    # view rather than of any one layer, so it shows whichever are on. Drawn
+    # after the components but ranked first in the legend: a peak the fit
+    # resolved to nothing (WSe2's C and center, often) is a flat line lying
+    # exactly on the background, and drawn first the background vanished.
+    if background is not None:
+        fig.add_trace(go.Scatter(
+            x=spectrum.processed_data.X,
+            y=background,
+            mode="lines",
+            name="Background",
+            line=dict(color=BACKGROUND_COLOR, width=2),
+            legendrank=999,  # ahead of the default 1000
+        ))
+
     # ==================== LAYER 7.5: RESIDUALS (FIT QUALITY INDICATOR) ====================
     # Only add if fitting succeeded AND user enabled "Show Residuals" checkbox
     # Residuals = Baseline-corrected - Fit Total (should be random noise around zero)
     # WHY: Residuals show fit quality - patterns indicate systematic errors (e.g., missing peaks)
-    if spectrum.fit_result is not None and spectrum.fit_result.success:
-        # Check that residuals array exists (calculated by lmfit)
-        if hasattr(spectrum.fit_result, 'residuals') and spectrum.fit_result.residuals is not None:
-            # Only add residuals if user explicitly enabled them
-            if layer_config.get("residuals", False):
-                # Add residuals trace as scatter plot (not line - want to see discrete residual points)
-                # Color: Green (distinct from other layers)
-                # WHY: User evaluates fit quality - residuals should be random noise around zero
-                import numpy as np
-                fig.add_trace(go.Scatter(
-                    x=spectrum.processed_data.X,  # Same X as fit
-                    y=spectrum.fit_result.residuals,  # Y = corrected - fit (from lmfit)
-                    mode="markers",  # Scatter points (not line)
-                    name="Residuals",  # Legend label
-                    marker=dict(size=3, color=RESIDUAL_COLOR),  # Small green dots
-                    visible=True  # Always visible when residuals layer is enabled
-                ))
+    if residual_panel:
+        # Scatter, not line - want to see discrete residual points. Green,
+        # distinct from other layers. Should be random noise around zero.
+        fig.add_trace(go.Scatter(
+            x=spectrum.processed_data.X,  # Same X as fit
+            y=spectrum.fit_result.residuals,  # Y = corrected - fit (from lmfit)
+            mode="markers",  # Scatter points (not line)
+            name="Residuals",  # Legend label
+            marker=dict(size=3, color=RESIDUAL_COLOR),  # Small green dots
+        ), row=2, col=1)
+        # Zero line, to see whether the residuals are centered.
+        fig.add_hline(y=0, line=dict(width=1, color="gray", dash="dash"), row=2, col=1)
 
     # ==================== LAYERS 8+: PEAK MARKERS (INITIAL GUESSES) ====================
     # Only add if user has defined peaks in peak table AND enabled "Show Peak Markers"
@@ -390,7 +447,7 @@ def create_unified_figure(spectrum: SpectrumFile, layer_config: Optional[Dict[st
         # We want markers to reach the current data curve height
         if spectrum.baseline_done:
             # After baseline: use baseline-corrected data height
-            Y_ref = spectrum.processed_data.Y
+            Y_ref = spectrum.processed_data.Y + offset
         elif spectrum.despike_done:
             # After despike: use despiked data height
             Y_ref = spectrum.processed_data.Y
@@ -438,10 +495,16 @@ def create_unified_figure(spectrum: SpectrumFile, layer_config: Optional[Dict[st
 
     # ==================== CONFIGURE PLOT LAYOUT ====================
     # Set axis labels, sizing, interactivity, legend position, margins
+    # X title on the bottom panel only; the residual panel takes its 25% from
+    # extra height rather than from the spectrum.
+    if residual_panel:
+        fig.update_xaxes(title_text=x_label, row=2, col=1)
+        fig.update_yaxes(title_text=y_label, row=1, col=1)
+        fig.update_yaxes(title_text="Residual", row=2, col=1)
+    else:
+        fig.update_layout(xaxis_title=x_label, yaxis_title=y_label)
     fig.update_layout(
-        xaxis_title=x_label,  # "Raman Shift (cm⁻¹)" or "Wavelength (nm)"
-        yaxis_title=y_label,  # "Intensity (a.u.)"
-        height=600,  # Fixed plot height in pixels (fits nicely in 70% center column)
+        height=760 if residual_panel else 600,  # Fixed plot height in pixels
         hovermode="closest",  # Hover shows nearest data point info (X, Y values)
         template="plotly_white",  # Clean white background with light grid lines
         legend=dict(
@@ -481,6 +544,7 @@ def _update_visibility_for_file(spectrum):
             'show_fit': True,
             'show_components': True,
             'show_residuals': True,
+            'show_on_background': True,
         })
     elif getattr(spectrum, 'baseline_done', False):
         set_view_options({
@@ -615,7 +679,8 @@ def render_unified_plot():
             "baseline_corrected": st.session_state.get("show_corrected", False),  # Default: hide corrected
             "fit_total": st.session_state.get("show_fit", False),  # Default: hide fit
             "components": st.session_state.get("show_components", False),  # Default: hide components
-            "residuals": st.session_state.get("show_residuals", False)  # Default: hide residuals
+            "residuals": st.session_state.get("show_residuals", False),  # Default: hide residuals
+            "on_background": st.session_state.get("show_on_background", True),
         }
 
         # Call create_unified_figure() to build Plotly figure with all layers
@@ -628,6 +693,13 @@ def render_unified_plot():
     # Render Plotly figure using width-aware helper (respects Display Settings)
     from core.viz.render import render_plot
     render_plot(fig, key="unified_plot")
+
+    if (spectrum is not None and layer_config.get("on_background")
+            and getattr(spectrum, "fit_result", None) is not None and spectrum.fit_result.success
+            and spectrum.processing_settings.baseline_applied
+            and background_offset(spectrum, layer_config) is None):
+        st.caption("Peaks on Background needs the baseline from this session's fit "
+                   "— re-run Auto-Workflow on this file to show it.")
 
     # Display fit results table below the plot
     if spectrum is not None and getattr(spectrum, 'fit_result', None) is not None and spectrum.fit_result.success:

@@ -127,6 +127,7 @@ def execute_auto_workflow(
             # Update BOTH raw_data and processed_data (matches manual workflow)
             spectrum.raw_data = SpectrumData(X=X_cropped, Y=Y_cropped)
             spectrum.processed_data = SpectrumData(X=X_cropped, Y=Y_cropped)
+            spectrum.background = None
 
             # Reset X-range flags (matches manual workflow)
             spectrum.x_range_enabled = False
@@ -175,6 +176,7 @@ def execute_auto_workflow(
 
         # Update processed_data (X unchanged, Y updated - matches manual workflow)
         spectrum.processed_data = SpectrumData(X=X, Y=Y_despiked)
+        spectrum.background = None
 
         # Set flags (matches manual workflow)
         spectrum.processing_settings.despike_applied = True
@@ -209,6 +211,7 @@ def execute_auto_workflow(
             # Skip baseline, mark as done
             spectrum.processing_settings.baseline_applied = False
             spectrum.baseline_done = True
+            spectrum.background = None
         else:
             X = spectrum.processed_data.X
             Y_despiked = spectrum.processed_data.Y
@@ -276,6 +279,10 @@ def execute_auto_workflow(
 
             # Update processed_data (matches manual workflow)
             spectrum.processed_data = SpectrumData(X=X, Y=Y_corrected)
+            # Kept, not discarded, so the fit can be drawn on top of it. In
+            # original scale: every baseline function returns it un-shifted,
+            # so Y_despiked == Y_corrected + baseline_curve.
+            spectrum.background = np.asarray(baseline_curve, dtype=np.float64)
 
             # Set flags (matches manual workflow)
             spectrum.processing_settings.baseline_applied = True
@@ -370,6 +377,7 @@ def execute_auto_workflow(
             'show_fit': True,             # Show fit total curve
             'show_components': True,      # Show peak components
             'show_residuals': True,       # Show residuals
+            'show_on_background': True,   # Fit drawn on the subtracted baseline
         })
 
         # Auto-expand export section (matches manual workflow)

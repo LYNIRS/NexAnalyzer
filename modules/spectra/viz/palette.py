@@ -49,6 +49,12 @@ FIT_TOTAL_DASH = "solid"
 # the whole point of the panel is telling them apart.
 RESIDUAL_COLOR = "#008000"  # CSS "green"
 
+# The subtracted baseline, drawn when the fit is shown sitting on the
+# background (v5.13.0) — the Spectra page's "Peaks on background" view and the
+# Quick Export that mirrors it. Gray: it is context, not a result, and a hue
+# here would compete with the preset colors the components are drawn in.
+BACKGROUND_COLOR = "#808080"  # CSS "gray"
+
 # Individual fitted peaks keep their own `FittedPeak.color`; only the style is
 # shared. Solid, so the dashed total fit reads as the distinct thing, and
 # semi-transparent so overlapping components stay legible.

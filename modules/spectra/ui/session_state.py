@@ -21,7 +21,7 @@ def initialize_session_state():
     - plot_width_preset: str (v2.1+, FR-14: "Compact" | "Standard" | "Wide" | "Full")
     - selected_preset: MaterialPreset or None (currently selected preset on the Spectra page)
     - show_raw / show_despiked / show_corrected / show_fit / show_components /
-      show_residuals: bool (View Options plot-layer visibility)
+      show_residuals / show_on_background: bool (View Options plot layers)
 
     This function is idempotent (safe to call multiple times).
     """
@@ -60,6 +60,7 @@ VIEW_OPTION_KEYS = (
     "show_fit",
     "show_components",
     "show_residuals",
+    "show_on_background",
 )
 
 #: Where the View Options start in a new session: the fitted-spectrum view.
@@ -70,6 +71,7 @@ VIEW_OPTION_DEFAULTS = {
     "show_fit": True,
     "show_components": True,
     "show_residuals": True,
+    "show_on_background": True,
 }
 
 # Session key holding the set of View Options the user has set by hand.

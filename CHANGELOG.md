@@ -5,6 +5,28 @@ All notable changes to NexAnalyzer will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.13.0] - 2026-10-06
+
+### Added
+
+- **Peaks on Background** (View Options, on by default after a fit): the
+  Spectra plot draws the subtracted baseline as a gray line and lifts the data,
+  the total fit and every component onto it, so the peaks are seen sitting on
+  the background they were separated from, as in a fitted XPS figure. The data
+  shown is the de-spiked spectrum (baseline-corrected + background), labelled
+  "Data". Quick Export's PNG/HTML follow the toggle.
+- **Residuals have their own panel** under the Spectra plot, sharing its X axis
+  (zoom one, both follow), as Quick Export already drew them. On the same axis
+  as data lifted onto a ~500-count background they squashed the peaks to a
+  sliver. The plot grows from 600 to 760 px when the panel is shown.
+  **No numbers move**: only what's drawn changes; the fit, CSVs, Excel and
+  reports are unchanged, and the QC/Sample Report grids still draw
+  baseline-corrected.
+- The auto-workflow now keeps the baseline it subtracts
+  (`SpectrumFile.background`, saved with projects). Files fitted before this
+  version, or projects saved before it, have none and show the
+  baseline-corrected view with a note to re-run.
+
 ## [5.12.1] - 2026-10-05
 
 ### Changed

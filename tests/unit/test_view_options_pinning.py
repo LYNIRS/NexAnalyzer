@@ -170,6 +170,7 @@ class TestTheWritersAgreeAtTheFitStage:
         assert fallback["residuals"] == stage["show_residuals"] is True
         assert fallback["fit_total"] == stage["show_fit"] is True
         assert fallback["baseline_corrected"] == stage["show_corrected"] is True
+        assert fallback["on_background"] == stage["show_on_background"] is True
 
     def test_the_fallback_names_residuals(self):
         """It omitted the key entirely, so the residuals layer could only ever
@@ -229,4 +230,5 @@ class TestStartingViewOptions:
             "show_fit": True,
             "show_components": True,
             "show_residuals": True,
+            "show_on_background": True,
         }
