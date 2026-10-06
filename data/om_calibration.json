@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "calibration": {
+    "100x": 0.04669,
+    "50x": 0.09337
+  }
+}

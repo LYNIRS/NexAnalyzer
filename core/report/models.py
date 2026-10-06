@@ -11,7 +11,7 @@ to import `modules`.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -115,3 +115,70 @@ class OpticalClassStat(NamedTuple):
     contrast_mean: Optional[float]
     contrast_std: Optional[float]
     n_frames: int
+
+
+class SizePopulationStat(NamedTuple):
+    """One size population's pooled stats -- the small or large half of a
+    `DomainSizeStat` that cleared `domain_size.MIN_POPULATION_RATIO`.
+
+    Same unit as the `DomainSizeStat` it lives on; there is no separate
+    calibration flag here because a sample is calibrated or not as a whole.
+
+    ``density_per_100um2`` is this population's own count over the *same*
+    pooled area `DomainSizeStat.area_um2` carries, scaled to flakes per
+    (100 um)^2 -- the two populations share one denominator (the sample's
+    analyzed area), only their counts differ. `None` when the sample isn't
+    calibrated, same as `DomainSizeStat`'s own density.
+    """
+
+    label: str  # "small" | "large"
+    n: int
+    diameter_median: float
+    diameter_mean: float
+    diameter_std: float
+    density_per_100um2: Optional[float] = None
+
+
+class DomainSizeStat(NamedTuple):
+    """Pooled flake domain-size statistics across a sample's segmented
+    frames, for the summary page's domain-size table.
+
+    The domain-size counterpart of `OpticalClassStat`, here for the same
+    reason: `core` cannot import `modules.optical.processing.domain_size` to
+    reach its `DomainResult`, so that module builds this and the renderer
+    only reads it.
+
+    ``diameter_median``/``diameter_mean``/``diameter_std`` are in whatever
+    unit ``unit`` names -- micrometres when a calibration was available for
+    the sample's magnification, pixels when it was not. They are never a
+    guessed micron figure standing in for a missing calibration: an
+    uncalibrated sample reports real pixel measurements honestly labelled
+    "px", not an invented "um".
+
+    ``populations`` is `None` for the ordinary, single-population case --
+    every existing caller and test keeps reading the pooled fields above
+    unchanged. It holds exactly two `SizePopulationStat` (small, large) when
+    `domain_size.split_size_populations` found a real ≥2x gap in the pooled
+    diameters; a renderer that wants the split reads this, one that doesn't
+    (or predates it) never has to know it exists.
+
+    ``area_um2`` is the sample's total analyzed area -- every frame's own
+    `DomainResult.area_um2` summed -- and ``density_per_100um2`` is
+    ``n_domains / area_um2 * domain_size.DENSITY_AREA_UM2``, the nucleation
+    density scaled to flakes per (100 um)^2 rather than per um2 -- a rate
+    over one um2 is a fraction far smaller than one for any real sample.
+    Both `None` when the sample isn't calibrated: a density in 1/px² isn't
+    comparable across magnifications, so it is omitted rather than invented,
+    the same rule every other domain-size figure here already follows.
+    """
+
+    n_domains: int
+    n_frames: int
+    diameter_median: float
+    diameter_mean: float
+    diameter_std: float
+    unit: str
+    calibrated: bool
+    populations: Optional[Tuple[SizePopulationStat, SizePopulationStat]] = None
+    area_um2: Optional[float] = None
+    density_per_100um2: Optional[float] = None

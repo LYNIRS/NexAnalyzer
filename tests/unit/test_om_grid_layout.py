@@ -17,12 +17,13 @@ from modules.optical.processing.contrast import FrameResult
 from modules.optical.viz.om_grid import _grid_units, _row_layout, build_om_grid_figure
 
 
-def _fake_frame(point: int) -> FrameResult:
+def _fake_frame(point: int, ref_label: str = "2L",
+                labels=("Below 2L", "Bilayer", "Above 2L")) -> FrameResult:
     h, w = 24, 32
     rgb = np.full((h, w, 3), 180.0)
     return FrameResult(
         name=f"50X-{point}", point=point, frame_type="rectangular",
-        ref_label="2L", labels=("Below 2L", "Bilayer", "Above 2L"),
+        ref_label=ref_label, labels=labels,
         percentages=(5.0, 90.0, 5.0),
         contrast_below=-6.0, contrast_above=4.0,
         components_below=3, components_above=2,
@@ -95,6 +96,26 @@ def test_a_sparse_nine_point_wafer_keeps_its_three_rows():
     and two -- position 4 belongs in row 2, not in the top-left cell."""
     assert _height([_fake_frame(p) for p in (4, 5, 6)]) == \
         _height([_fake_frame(p) for p in range(1, 7)])
+
+
+def test_the_suptitle_names_the_reference_from_labels_not_ref_label():
+    """The defect this guards: the suptitle used to read `ref_label` directly,
+    so a low_coverage frame (labels relabelled "Substrate", ref_label still
+    the raw preset key like "1L") would print "1L reference" in its own
+    title instead of "Substrate reference". Two frame sets differing only in
+    `ref_label`, with identical `labels`, must render byte-identical PNGs --
+    confirming the title (and everything else) no longer depends on
+    `ref_label` at all."""
+    from modules.optical.viz.om_grid import build_om_grid_figure
+
+    labels = ("Below Substrate", "Substrate", "Monolayer")
+    as_1L = [_fake_frame(p, ref_label="1L", labels=labels) for p in range(1, 4)]
+    as_2L = [_fake_frame(p, ref_label="2L", labels=labels) for p in range(1, 4)]
+
+    png_1L = build_om_grid_figure(as_1L, sample_name="T", show_histograms=False)
+    png_2L = build_om_grid_figure(as_2L, sample_name="T", show_histograms=False)
+
+    assert png_1L == png_2L
 
 
 if __name__ == "__main__":

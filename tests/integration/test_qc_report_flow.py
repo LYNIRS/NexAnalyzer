@@ -25,6 +25,7 @@ import pytest
 from openpyxl import load_workbook
 from streamlit.testing.v1 import AppTest
 
+import core.io.om_calibration as om_calibration_module
 from core.paths import PROJECT_ROOT
 from modules.optical.ui import qc_report_state as state_module
 from modules.spectra.processing.sample_scanner import scan_sample_folder
@@ -49,6 +50,15 @@ def _initial_state(**overrides):
     finally:
         state_module.st = real_st
     fresh = store["qc_report"]
+    # Domain-size measurement is opt-in and, when unset, resolves from this
+    # machine's real report_settings.json -- defaulting it here keeps every
+    # test below deterministic and exercising the feature as it did before it
+    # became opt-in. A test of the opt-out path overrides it explicitly.
+    fresh["measure_domain_size"] = True
+    # Same reasoning: the size-population split also resolves from the real
+    # report_settings.json when unset. False matches its own off-by-default,
+    # and a test of the split path overrides it explicitly.
+    fresh["split_size_populations"] = False
     fresh.update(overrides)
     return fresh
 
@@ -165,6 +175,108 @@ class TestPageFlow:
 
         for frame in at.session_state["qc_report"]["frames"]:
             assert sum(frame.percentages) == pytest.approx(100.0, abs=0.01)
+
+    def test_domain_size_measurement_can_be_switched_off(self, tmp_path):
+        """The opt-out path: everything else still renders, but no domain-size
+        figure or table is produced and nothing measures the frames a second
+        time."""
+        at, _scan = _seeded_app(tmp_path)
+        at.session_state["qc_report"]["measure_domain_size"] = False
+        at.run()
+        next(b for b in at.button if "Generate QC Report" in b.label).click().run()
+
+        assert not at.exception, [e.value for e in at.exception]
+        state = at.session_state["qc_report"]
+        assert state["om_png"][:8] == _PNG_MAGIC
+        assert state["domain_grid_png"] is None
+        assert state["domain_results"] is None
+        assert state["domain_stat"] is None
+        assert state["summary_png"][:8] == _PNG_MAGIC
+
+    def test_domain_size_calibration_matches_regardless_of_magnification_case(
+        self, tmp_path, monkeypatch
+    ):
+        """The defect this guards: a folder named "50X_1.png" (a common
+        capitalisation) has magnification "50X", and a naive dict lookup
+        against a calibration entry saved as "50x" silently missed, reporting
+        pixels instead of microns with no error at all."""
+        for point in range(1, 10):
+            _write_multi_spectrum_raman(tmp_path / f"RM_{point}.txt", seed=point)
+            _write_om_frame(tmp_path / f"50X_{point}.png", seed=100 + point)
+        monkeypatch.setattr(
+            om_calibration_module, "load_om_calibration", lambda path=None: {"50x": 0.1}
+        )
+
+        scan = scan_sample_folder(str(tmp_path))
+        assert scan.magnifications() == ["50X"]
+
+        at = AppTest.from_file(PAGE, default_timeout=180)
+        at.session_state["qc_report"] = _initial_state(
+            folder=str(tmp_path), scan=scan, magnification="50X",
+            material="Silicon", reference_layer="2L",
+        )
+        at.run()
+        next(b for b in at.button if "Generate QC Report" in b.label).click().run()
+
+        assert not at.exception, [e.value for e in at.exception]
+        stat = at.session_state["qc_report"]["domain_stat"]
+        assert stat is not None
+        assert stat.calibrated, "case mismatch left the sample reported in pixels"
+        assert stat.unit == "µm"
+
+    def test_domain_target_selects_which_class_is_measured(self, tmp_path):
+        """Switching away from the "above" default must actually change what
+        gets measured, not just get accepted and ignored."""
+        at, _scan = _seeded_app(tmp_path)
+        at.session_state["qc_report"]["domain_target"] = "below"
+        at.run()
+        next(b for b in at.button if "Generate QC Report" in b.label).click().run()
+
+        assert not at.exception, [e.value for e in at.exception]
+        state = at.session_state["qc_report"]
+        assert state["domain_results"] is not None
+        assert all(r.target == "below" for r in state["domain_results"])
+
+    def test_split_size_populations_defaults_off(self, tmp_path):
+        """Off by default -- the split has fired on frames with no real
+        second population, so an operator who hasn't asked for it should see
+        the plain pooled measurement even on a sample whose domains would
+        otherwise clear the ratio."""
+        at, _scan = _generated(tmp_path)
+
+        stat = at.session_state["qc_report"]["domain_stat"]
+        assert stat is not None
+        assert stat.populations is None
+        assert all(r.population_is_large is None for r in at.session_state["qc_report"]["domain_results"])
+
+    def test_split_size_populations_when_enabled_reaches_the_stat(self, tmp_path):
+        """Ticking it must actually reach measure_domains()/domain_size_stat(),
+        not just get accepted and ignored."""
+        at, _scan = _seeded_app(tmp_path)
+        at.session_state["qc_report"]["split_size_populations"] = True
+        at.run()
+        next(b for b in at.button if "Generate QC Report" in b.label).click().run()
+
+        assert not at.exception, [e.value for e in at.exception]
+        stat = at.session_state["qc_report"]["domain_stat"]
+        assert stat is not None
+        assert stat.populations is not None
+
+    def test_low_coverage_relabels_the_reference_class_as_substrate(self, tmp_path):
+        """Ticking it must actually reach the segmentation's own labels, not
+        just get accepted and ignored -- the whole point is that a
+        sparse-nucleation sample's majority class should read "Substrate",
+        not the named reference layer."""
+        at, _scan = _seeded_app(tmp_path)
+        at.session_state["qc_report"]["low_coverage"] = True
+        at.run()
+        next(b for b in at.button if "Generate QC Report" in b.label).click().run()
+
+        assert not at.exception, [e.value for e in at.exception]
+        state = at.session_state["qc_report"]
+        assert state["frames"], "no frames segmented"
+        for frame in state["frames"]:
+            assert frame.labels == ("Below Substrate", "Substrate", "Bilayer")
 
     def test_a_sample_with_no_optical_images_still_fits_its_spectra(self, tmp_path):
         at, _scan = _generated(tmp_path, images=False)
@@ -482,6 +594,31 @@ class TestWorkbook:
         assert [row[0] for row in wb["OM_Points"].iter_rows(min_row=2, values_only=True)] \
             == list(range(1, 10))
 
+    def test_the_domain_size_sheet_travels_too(self, tmp_path):
+        """The sheet exists and its shape agrees with what the run actually
+        found -- a "Population" column and two data rows when the pooled
+        domains split, one row without it otherwise. Whether this particular
+        fixture's noise floor produces enough stray domains to clear
+        MIN_DOMAINS_FOR_SPLIT is incidental; either shape is a pass."""
+        at, _scan = _generated(tmp_path)
+
+        stat = at.session_state["qc_report"]["domain_stat"]
+        assert stat is not None
+        wb = load_workbook(BytesIO(at.session_state["qc_report"]["xlsx_bytes"]))
+
+        assert "Domain_Size" in wb.sheetnames
+        ws = wb["Domain_Size"]
+        rows = [[cell.value for cell in row] for row in ws.iter_rows()]
+        header_row = next(row for row in rows if "Domains_N" in row)
+        data_rows = rows[rows.index(header_row) + 1:]
+
+        if stat.populations:
+            assert "Population" in header_row
+            assert len(data_rows) == 2
+        else:
+            assert "Population" not in header_row
+            assert len(data_rows) == 1
+
 
 class TestSave:
     """The save path, with the native dialog stubbed out.
@@ -531,8 +668,9 @@ class TestSave:
             "TSM_QC_Report_1_Summary.png",
             "TSM_QC_Report_2_OM.png",
             "TSM_QC_Report_3_OM_diagnostic.png",
-            "TSM_QC_Report_4_Raman.png",
-            "TSM_QC_Report_5_Raman_stats.png",
+            "TSM_QC_Report_4_Domain_size.png",
+            "TSM_QC_Report_5_Raman.png",
+            "TSM_QC_Report_6_Raman_stats.png",
         ]
         for path in out.glob("*.png"):
             assert path.read_bytes()[:8] == _PNG_MAGIC
@@ -547,14 +685,14 @@ class TestSave:
         assert [p.name for p in out.glob("*.xlsx")] == ["TSM_QC_Report.xlsx"]
 
     def test_a_technique_with_no_data_writes_no_file_for_it(self, tmp_path, monkeypatch):
-        """Silicon has no PL block, so nothing numbered 6 or 7 appears rather
+        """Silicon has no PL block, so nothing numbered 7 or 8 appears rather
         than an empty figure claiming a measurement."""
         out = tmp_path / "out"
         out.mkdir()
         self._run_and_save(tmp_path, monkeypatch, str(out / "TSM_QC_Report.png"))
 
-        assert not list(out.glob("*_6_*"))
         assert not list(out.glob("*_7_*"))
+        assert not list(out.glob("*_8_*"))
 
     def test_the_dialog_opens_in_the_sample_folder(self, tmp_path, monkeypatch):
         out = tmp_path / "out"

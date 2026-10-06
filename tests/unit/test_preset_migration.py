@@ -349,6 +349,71 @@ class TestRoundTrip:
 
         assert params.as_kwargs() == {"margin": 0.12, "ff_divisor": 16.0}
 
+    def test_marker_margin_sigma_round_trips_but_never_reaches_analyse_frame(self):
+        """It tunes domain_size.measure_domains()'s watershed marker floor,
+        not classify() -- as_kwargs() feeds analyse_frame directly, and that
+        function has no such keyword."""
+        params = OpticalParams(nsigma=4.0, marker_margin_sigma=0.2)
+
+        assert params.to_dict() == {"nsigma": 4.0, "marker_margin_sigma": 0.2}
+        assert "marker_margin_sigma" not in params.as_kwargs()
+        assert OpticalParams.from_dict(params.to_dict()) == params
+
+    def test_marker_margin_sigma_out_of_range_is_flagged(self):
+        assert OpticalParams(marker_margin_sigma=0.2).validate() == []
+        assert any(
+            "marker_margin_sigma" in e
+            for e in OpticalParams(marker_margin_sigma=-0.1).validate()
+        )
+        assert any(
+            "marker_margin_sigma" in e
+            for e in OpticalParams(marker_margin_sigma=5.1).validate()
+        )
+
+    def test_marker_min_distance_round_trips_but_never_reaches_analyse_frame(self):
+        """Same shape as marker_margin_sigma immediately above it: it tunes
+        domain_size.measure_domains()'s watershed marker spacing, not
+        classify(), so as_kwargs() (which feeds analyse_frame directly) must
+        not carry it."""
+        params = OpticalParams(nsigma=4.0, marker_min_distance=25)
+
+        assert params.to_dict() == {"nsigma": 4.0, "marker_min_distance": 25}
+        assert "marker_min_distance" not in params.as_kwargs()
+        assert OpticalParams.from_dict(params.to_dict()) == params
+
+    def test_marker_min_distance_out_of_range_is_flagged(self):
+        assert OpticalParams(marker_min_distance=25).validate() == []
+        assert any(
+            "marker_min_distance" in e
+            for e in OpticalParams(marker_min_distance=0).validate()
+        )
+        assert any(
+            "marker_min_distance" in e
+            for e in OpticalParams(marker_min_distance=201).validate()
+        )
+
+    def test_mask_closing_radius_round_trips_but_never_reaches_analyse_frame(self):
+        """Same shape as marker_margin_sigma/marker_min_distance above it: it
+        tunes domain_size.measure_domains()'s mask closing, not classify(),
+        so as_kwargs() must not carry it."""
+        params = OpticalParams(nsigma=4.0, mask_closing_radius=3)
+
+        assert params.to_dict() == {"nsigma": 4.0, "mask_closing_radius": 3}
+        assert "mask_closing_radius" not in params.as_kwargs()
+        assert OpticalParams.from_dict(params.to_dict()) == params
+
+    def test_mask_closing_radius_out_of_range_is_flagged(self):
+        assert OpticalParams(mask_closing_radius=3).validate() == []
+        assert OpticalParams(mask_closing_radius=0).validate() == []
+        assert any(
+            "mask_closing_radius" in e
+            for e in OpticalParams(mask_closing_radius=-1).validate()
+        )
+        assert any(
+            "mask_closing_radius" in e
+            for e in OpticalParams(mask_closing_radius=11).validate()
+        )
+
     def test_an_unknown_layer_round_trips_and_is_flagged(self, tmp_path):
         """Dropping it on load would turn "I loaded the file" into "I deleted
         part of the file"."""

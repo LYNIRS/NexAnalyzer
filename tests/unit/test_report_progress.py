@@ -28,10 +28,19 @@ def _progress(stages=None):
 
 
 class TestMeasuredWeights:
-    def test_the_full_chain_sums_to_one(self):
-        """Shares of a ~64 s real-sample run. If these stop summing to 1 the
-        bar either never finishes or finishes early."""
-        assert sum(s.weight for s in STAGES) == pytest.approx(1.0)
+    def test_the_full_chain_sums_to_one_plus_the_unmeasured_placeholder(self):
+        """The measured ~64 s chain's shares still sum to 1 on their own --
+        `ReportProgress` renormalizes whatever it is handed, so this isn't
+        load-bearing for a run, but it is what keeps the docstring's
+        percentages of that 64 s meaningful. `domain_size` is deliberately
+        outside that budget (see its module docstring): an unmeasured
+        placeholder added on top, not a share carved out of it, so it adds its
+        own 0.390 rather than participating in the sum-to-one."""
+        measured = sum(s.weight for s in STAGES if s.key != "domain_size")
+        assert measured == pytest.approx(1.0)
+
+        domain_size = next(s for s in STAGES if s.key == "domain_size")
+        assert sum(s.weight for s in STAGES) == pytest.approx(1.0 + domain_size.weight)
 
     def test_no_stage_is_weightless_and_none_dominates_entirely(self):
         for stage in STAGES:
@@ -95,6 +104,32 @@ class TestStagesFor:
         assert "optical_images" in keys
         assert "optical_segmentation" not in keys
         assert "om_figures" not in keys
+
+    def test_domain_size_measurement_is_opt_in(self):
+        """The operator's own choice, not a fact about the sample -- off must
+        drop the stage even when everything it needs (frames, a segmentation)
+        is otherwise present."""
+        keys = [s.key for s in stages_for(
+            has_raman=True, has_pl=True, has_optical=True, has_domain_size=False)]
+
+        assert "domain_size" not in keys
+        assert "optical_segmentation" in keys
+
+    def test_domain_size_measurement_defaults_to_on(self):
+        """A caller that hasn't been updated for the flag keeps today's
+        behaviour rather than silently losing the stage."""
+        keys = [s.key for s in stages_for(has_raman=True, has_pl=True, has_optical=True)]
+
+        assert "domain_size" in keys
+
+    def test_domain_size_measurement_still_needs_a_segmentation(self):
+        """Opting in cannot conjure a `hi` mask out of a segmentation that
+        never ran."""
+        keys = [s.key for s in stages_for(
+            has_raman=True, has_pl=True, has_optical=True,
+            has_segmentation=False, has_domain_size=True)]
+
+        assert "domain_size" not in keys
 
     def test_stages_keep_execution_order(self):
         keys = [s.key for s in stages_for(has_raman=True, has_pl=True,

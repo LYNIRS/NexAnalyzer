@@ -74,14 +74,26 @@ def layer_word(ref_label: str) -> str:
     return _LAYER_WORDS.get(ref_label, ref_label)
 
 
-def class_labels(ref_label: str) -> Tuple[str, str, str]:
+def class_labels(ref_label: str, low_coverage: bool = False) -> Tuple[str, str, str]:
     """
     The (darker, reference, brighter) class names for a reference layer.
 
     Ordinal by design: the algorithm separates pixels darker and brighter than
     the reference film, and cannot say what those populations are made of.
     "Below 2L" is honest where "Substrate" or "Monolayer" would be a guess.
+
+    `classify()` always treats the frame's most common pixel value as "the
+    reference" -- `ref_label` never reaches the threshold math, it only names
+    the result. For a sparse-nucleation sample that majority *is* bare
+    substrate, not the named film, and `low_coverage` says so: the reference
+    class is relabelled "Substrate" and the brighter class becomes the named
+    film itself (what's actually above bare substrate), rather than
+    "Above {ref_label}" over what would really be substrate. Still just two
+    populations underneath -- this doesn't separate a thicker layer from the
+    named one if both are present above substrate in the same frame.
     """
+    if low_coverage:
+        return ("Below Substrate", "Substrate", layer_word(ref_label))
     return (f"Below {ref_label}", layer_word(ref_label), f"Above {ref_label}")
 
 
@@ -269,12 +281,19 @@ def measure(s: np.ndarray, lo: np.ndarray, ref: np.ndarray,
     return out
 
 
-def analyse(path, ref_label: str, nsigma: float = DEFAULT_NSIGMA,
-            minpx: int = DEFAULT_MINPX, margin: Optional[float] = None,
-            ff_divisor: Optional[float] = None,
-            abs_threshold=None) -> dict:
-    """Segment one frame. Returns the raw working dict; see `analyse_frame`."""
-    a = load(path)
+def analyse_array(a: np.ndarray, ref_label: str, nsigma: float = DEFAULT_NSIGMA,
+                  minpx: int = DEFAULT_MINPX, margin: Optional[float] = None,
+                  ff_divisor: Optional[float] = None,
+                  abs_threshold=None) -> dict:
+    """Segment an already-loaded frame array. Returns the raw working dict;
+    see `analyse_frame`.
+
+    Split out of `analyse()` so a caller with an array already in memory --
+    domain-size analysis, reusing a `FrameResult.original` -- does not repeat
+    the disk read and LANCZOS resize `load()` does. Those are most of a
+    frame's cost; flat-field, smoothing and thresholding on an array already
+    in memory are cheap by comparison.
+    """
     aperture, valid, ftype = make_mask(a, margin)
     flat = flatfield(a, aperture, ftype, ff_divisor)
     # sigma 0 on the channel axis blurs each channel independently, which is
@@ -287,6 +306,18 @@ def analyse(path, ref_label: str, nsigma: float = DEFAULT_NSIGMA,
     meas = measure(s, lo, ref, hi, valid)
     return dict(a=a, s=s, valid=valid, lo=lo, ref=ref, hi=hi, st=st,
                 meas=meas, ftype=ftype, ref_label=ref_label)
+
+
+def analyse(path, ref_label: str, nsigma: float = DEFAULT_NSIGMA,
+            minpx: int = DEFAULT_MINPX, margin: Optional[float] = None,
+            ff_divisor: Optional[float] = None,
+            abs_threshold=None) -> dict:
+    """Segment one frame from disk. Returns the raw working dict; see
+    `analyse_frame`. `load()` then `analyse_array()` -- see that function for
+    why a caller with an in-memory array should call it directly instead."""
+    a = load(path)
+    return analyse_array(a, ref_label, nsigma=nsigma, minpx=minpx, margin=margin,
+                         ff_divisor=ff_divisor, abs_threshold=abs_threshold)
 
 
 # ---------------------------------------------------------------- app surface
@@ -334,7 +365,7 @@ def analyse_frame(path, point: int, ref_label: str, name: Optional[str] = None,
                   nsigma: float = DEFAULT_NSIGMA, minpx: int = DEFAULT_MINPX,
                   margin: Optional[float] = None,
                   ff_divisor: Optional[float] = None,
-                  abs_threshold=None) -> FrameResult:
+                  abs_threshold=None, low_coverage: bool = False) -> FrameResult:
     """Segment one frame and return it as a `FrameResult`.
 
     Every tuning argument defaults to the module constant it overrides, so
@@ -342,6 +373,10 @@ def analyse_frame(path, point: int, ref_label: str, name: Optional[str] = None,
     exactly -- which is what keeps tests/unit/test_om_contrast.py's locked
     numbers meaningful. `abs_threshold` defaults to None for the same reason:
     unset, `classify` thresholds on nsigma exactly as it always has.
+
+    `low_coverage` only changes `labels` (see `class_labels`) -- it never
+    reaches `analyse`/`classify`, so the segmentation itself is identical
+    either way.
     """
     res = analyse(path, ref_label, nsigma=nsigma, minpx=minpx, margin=margin,
                   ff_divisor=ff_divisor, abs_threshold=abs_threshold)
@@ -351,7 +386,7 @@ def analyse_frame(path, point: int, ref_label: str, name: Optional[str] = None,
         point=point,
         frame_type=res["ftype"],
         ref_label=ref_label,
-        labels=class_labels(ref_label),
+        labels=class_labels(ref_label, low_coverage),
         percentages=(meas["below"]["pct"], meas["ref"]["pct"], meas["above"]["pct"]),
         contrast_below=meas["below"]["cg"],
         contrast_above=meas["above"]["cg"],

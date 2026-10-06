@@ -41,7 +41,7 @@ from matplotlib.patches import Rectangle  # noqa: E402
 from matplotlib.textpath import TextPath  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from .models import RAW_STAT_LABEL, OpticalClassStat, PeakStat  # noqa: E402
+from .models import DomainSizeStat, RAW_STAT_LABEL, OpticalClassStat, PeakStat  # noqa: E402
 
 PAGE_WIDTH_IN, PAGE_HEIGHT_IN = 13.333, 7.5
 
@@ -538,6 +538,70 @@ def _add_om_table(fig, classes: Optional[Sequence[OpticalClassStat]]) -> None:
                 headers, rows, col_fracs, _table_font(len(rows)))
 
 
+def _add_domain_table(fig, stat: Optional[DomainSizeStat],
+                      left: float, top: float, w: float, h: float,
+                      class_label: Optional[str] = None) -> None:
+    """Pooled domain-size statistics, one row, stacked below the PL table.
+
+    A placeholder box when domain-size analysis did not run at all (no OM
+    frames, or no domain found to split) -- the same convention `_add_stats_table`
+    uses for a technique with no stats, so a missing block always reads the
+    same way regardless of which one it is.
+
+    Reports pixel units, honestly labelled, when the sample's magnification
+    has no micron-per-pixel calibration set -- see `DomainSizeStat`'s own
+    docstring. This never invents a calibration to fill the gap.
+
+    `class_label` names the OM class the domains were split from (e.g.
+    "Bilayer", "Below 2L"), the same wording the OM class table uses. None
+    omits it -- the caption reads just "Domain size" as before.
+    """
+    caption = "Domain size (equivalent circular diameter)"
+    if class_label:
+        caption += f" — {class_label}"
+    _text(fig, left, top - _TABLE_CAPTION_GAP / 2, caption,
+          size=_FS_CAPTION, bold=True, va="center")
+
+    if stat is None or stat.n_domains == 0:
+        _add_placeholder(fig, left, top, w, h)
+        return
+
+    if stat.populations:
+        # Two rows (small, large) instead of the pooled one -- a ≥2x size
+        # gap was found (domain_size.split_size_populations), so the pooled
+        # mean alone would blend two real, differently-sized flake
+        # populations into a number that describes neither. A leading
+        # "Population" column is what tells the two rows apart; the unsplit
+        # table below has never needed one. `Frames` repeats the
+        # sample-level count on both rows: populations aren't counted
+        # per-frame, only domains are.
+        headers = ["Size", "Domains (n)", "Frames",
+                   f"Median ({stat.unit})", f"Mean ± Std ({stat.unit})",
+                   "Density (/(100µm)²)"]
+        col_fracs = [0.09, 0.14, 0.11, 0.19, 0.22, 0.25]
+        rows = [
+            [pop.label.capitalize(), str(pop.n), str(stat.n_frames),
+             f"{pop.diameter_median:.2f}", f"{pop.diameter_mean:.2f} ± {pop.diameter_std:.2f}",
+             f"{pop.density_per_100um2:.1f}" if pop.density_per_100um2 is not None else _DASH]
+            for pop in stat.populations
+        ]
+    else:
+        headers = ["Domains (n)", "Frames", f"Median ({stat.unit})", f"Mean ± Std ({stat.unit})",
+                   "Density (/(100µm)²)"]
+        col_fracs = [0.15, 0.12, 0.20, 0.26, 0.27]
+        rows = [[
+            str(stat.n_domains), str(stat.n_frames),
+            f"{stat.diameter_median:.2f}", f"{stat.diameter_mean:.2f} ± {stat.diameter_std:.2f}",
+            f"{stat.density_per_100um2:.1f}" if stat.density_per_100um2 is not None else _DASH,
+        ]]
+    _draw_table(fig, left, top, w, h, headers, rows, col_fracs, _table_font(len(rows)))
+
+    if not stat.calibrated:
+        _text(fig, left, top + h + 0.03,
+             "No µm/px calibration set for this magnification — sizes shown in pixels.",
+             size=_FS_OM_NOTE, color=_MUTED_TEXT)
+
+
 # ------------------------------------------------------------------- OM grid
 
 
@@ -587,6 +651,8 @@ def build_summary_figure(
     pl_stats: Optional[Sequence[PeakStat]] = None,
     raman_ratios: Optional[Sequence[Tuple[str, Tuple[float, float, int]]]] = None,
     show_fwhm_v1: bool = False,
+    domain_stat: Optional[DomainSizeStat] = None,
+    domain_class_label: Optional[str] = None,
     dpi: int = 144,
 ) -> bytes:
     """Render the overview page and return it as PNG bytes.
@@ -605,6 +671,13 @@ def build_summary_figure(
     gets. A technique with no stats gets a placeholder box rather than a
     missing table, so the page's shape does not change with its contents.
 
+    `domain_stat` is the pooled flake domain-size summary, drawn as a third
+    table stacked below the PL one on the right side -- the left side has no
+    room left, the OM table already fills what was free there. None (no
+    domain-size analysis ran, e.g. no OM frames) gets a placeholder box like
+    the other two tables. `domain_class_label` names the OM class it was
+    measured from (e.g. "Bilayer"); None omits it from the caption.
+
     At the default 144 dpi the page is 1920x1080.
     """
     fig = _new_page(dpi)
@@ -619,10 +692,16 @@ def build_summary_figure(
             fig, "Raman", raman_stats, _TABLE_LEFT, _RAMAN_TABLE_TOP, _TABLE_W,
             raman_height, ratios=raman_ratios, show_fwhm_v1=show_fwhm_v1,
         )
+        pl_top = _RAMAN_TABLE_TOP + raman_height + _TABLE_GAP
+        pl_height = _table_height(len(pl_stats or []))
         _add_stats_table(
-            fig, "PL", pl_stats, _TABLE_LEFT,
-            _RAMAN_TABLE_TOP + raman_height + _TABLE_GAP, _TABLE_W,
-            _table_height(len(pl_stats or [])), show_fwhm_v1=show_fwhm_v1,
+            fig, "PL", pl_stats, _TABLE_LEFT, pl_top, _TABLE_W,
+            pl_height, show_fwhm_v1=show_fwhm_v1,
+        )
+        domain_rows = 2 if domain_stat and domain_stat.populations else 1
+        _add_domain_table(
+            fig, domain_stat, _TABLE_LEFT, pl_top + pl_height + _TABLE_GAP,
+            _TABLE_W, _table_height(domain_rows), class_label=domain_class_label,
         )
 
         buf = io.BytesIO()

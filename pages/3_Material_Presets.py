@@ -26,6 +26,7 @@ reports -- it silently serves one block's peak rows into the other.
 import pandas as pd
 import streamlit as st
 
+from core.io.om_calibration import load_om_calibration, save_om_calibration
 from modules.optical.processing.contrast import layer_word
 from modules.spectra.models.preset import (
     OPTICAL_LAYERS,
@@ -76,6 +77,30 @@ _OPTICAL_FIELDS = {
         "layer step (~+4 %) puts the boundary midway between the film and the "
         "next layer up. Not a mirror of 'below': one layer up is a smaller "
         "step than the drop to substrate.",
+    ),
+    "marker_margin_sigma": (
+        "domain marker sensitivity (σ)",
+        "QC Report's domain-size measurement only, not the segmentation "
+        "above. How many noise-widths past its class's own boundary a "
+        "watershed marker must clear. Lower (e.g. 0.1-0.2) if real domains "
+        "are going missing because they're too flat/faint; default 0.5.",
+    ),
+    "marker_min_distance": (
+        "domain marker spacing (px)",
+        "QC Report's domain-size measurement only. Minimum pixel separation "
+        "between two accepted watershed markers. Raise it (e.g. 30-80) if "
+        "one flake's own internal reflection highlights are being "
+        "watershed-split into several domains instead of staying one; "
+        "default 8.",
+    ),
+    "mask_closing_radius": (
+        "domain edge closing radius (px)",
+        "QC Report's domain-size measurement only. Bridges small gaps in "
+        "the segmentation mask before domains are counted, absorbing "
+        "fringe fragments a flake's noisy real edge leaves disconnected. "
+        "Raise it a little (1-3) if small domains keep appearing right at "
+        "or inside a large flake's footprint; too large starts merging "
+        "genuinely separate close-together small flakes. Default 0 (off).",
     ),
 }
 
@@ -245,7 +270,8 @@ def _render_optical_block(key_prefix: str, layer: str,
             values[name] = None
             continue
         try:
-            values[name] = int(raw) if name == "minpx" else float(raw)
+            is_int_field = name in ("minpx", "marker_min_distance", "mask_closing_radius")
+            values[name] = int(raw) if is_int_field else float(raw)
         except ValueError:
             st.error(f"{layer} {label}: '{raw}' is not a number.")
             values[name] = None
@@ -307,19 +333,23 @@ def _render_preset_form(presets: dict, key_prefix: str,
         "blank stores no block at all, and the QC Report says it is running "
         "defaults."
     )
-    optical_columns = st.columns(len(OPTICAL_LAYERS))
     optical = {}
-    for column, layer in zip(optical_columns, OPTICAL_LAYERS):
-        with column:
-            st.caption(f"**{layer_word(layer)}** ({layer})")
-            candidate = _render_optical_block(
-                f"{key_prefix}_optical", layer,
-                d.optical.get(layer) if d else None,
-            )
-            # Only store a block that says something. An all-blank layer is
-            # "untuned", which is the absence of a block, not an empty one.
-            if candidate.to_dict():
-                optical[layer] = candidate
+    for index, layer in enumerate(OPTICAL_LAYERS):
+        # One full-width row per layer, not side-by-side columns: each row
+        # already splits into st.columns(len(_OPTICAL_FIELDS)) (9, once the
+        # domain-size-only fields are counted), and nesting that inside a
+        # half-width column left every field box uselessly narrow.
+        if index > 0:
+            st.divider()
+        st.caption(f"**{layer_word(layer)}** ({layer})")
+        candidate = _render_optical_block(
+            f"{key_prefix}_optical", layer,
+            d.optical.get(layer) if d else None,
+        )
+        # Only store a block that says something. An all-blank layer is
+        # "untuned", which is the absence of a block, not an empty one.
+        if candidate.to_dict():
+            optical[layer] = candidate
 
     # Unknown layers round-trip untouched rather than being dropped on edit.
     if d:
@@ -422,3 +452,50 @@ st.markdown("---")
 st.subheader("Add New Material")
 with st.expander("➕ New material", expanded=len(presets) == 0):
     _render_preset_form(presets, key_prefix="new")
+
+st.markdown("---")
+st.subheader("Objective / Magnification Calibration")
+st.caption(
+    "Micron-per-pixel, by magnification group — not by material: a 50X "
+    "objective has the same field of view regardless of what film is under "
+    "it. Used by the QC Report's domain-size analysis to convert measured "
+    "pixel sizes into real units. A magnification with no row here is "
+    "reported in pixels, honestly, rather than guessed."
+)
+
+calibration = load_om_calibration()
+calibration_df = pd.DataFrame(
+    [{"Magnification": mag, "um_per_px": value} for mag, value in sorted(calibration.items())],
+    columns=["Magnification", "um_per_px"],
+)
+edited_calibration_df = st.data_editor(
+    calibration_df,
+    num_rows="dynamic",
+    width="stretch",
+    column_config={
+        "Magnification": st.column_config.TextColumn(
+            "Magnification", required=True, help='e.g. "50x", matching the OM folder naming.'
+        ),
+        "um_per_px": st.column_config.NumberColumn(
+            "µm/px", required=True, min_value=0.0, format="%.5f"
+        ),
+    },
+    key="om_calibration_editor",
+)
+
+if st.button("💾 Save Calibration"):
+    rows = edited_calibration_df.dropna(subset=["Magnification", "um_per_px"]).to_dict("records")
+    magnifications = [str(r["Magnification"]).strip() for r in rows]
+    duplicates = {m for m in magnifications if magnifications.count(m) > 1}
+    if duplicates:
+        st.error(f"Duplicate magnification(s): {', '.join(sorted(duplicates))}")
+    elif any(not m for m in magnifications):
+        st.error("Magnification cannot be blank.")
+    elif any(float(r["um_per_px"]) <= 0 for r in rows):
+        st.error("µm/px must be > 0.")
+    else:
+        save_om_calibration({
+            str(r["Magnification"]).strip(): float(r["um_per_px"]) for r in rows
+        })
+        st.success("Calibration saved.")
+        st.rerun()

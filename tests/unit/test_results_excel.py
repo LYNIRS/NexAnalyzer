@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from openpyxl import load_workbook
 
-from core.report.models import RAW_STAT_LABEL, PeakStat
+from core.report.models import RAW_STAT_LABEL, DomainSizeStat, PeakStat, SizePopulationStat
 from modules.spectra.io.results_excel import TechniqueResults, build_sample_results_xlsx
 from modules.spectra.models.peak import FittedPeak, FitResult
 from modules.spectra.models.spectrum import ProcessingSettings, SpectrumData, SpectrumFile
@@ -272,3 +272,73 @@ class TestUsability:
 
         assert ws.freeze_panes == "A2"
         assert ws.auto_filter.ref is not None
+
+
+def _unsplit_domain_stat(unit="px", calibrated=False):
+    return DomainSizeStat(
+        n_domains=59, n_frames=9, diameter_median=66.86, diameter_mean=68.56,
+        diameter_std=30.24, unit=unit, calibrated=calibrated,
+    )
+
+
+def _split_domain_stat():
+    return DomainSizeStat(
+        n_domains=802, n_frames=9, diameter_median=10.85, diameter_mean=16.31,
+        diameter_std=16.69, unit="px", calibrated=False,
+        populations=(
+            SizePopulationStat("small", 745, 10.22, 12.13, 5.58),
+            SizePopulationStat("large", 57, 66.44, 70.83, 17.72),
+        ),
+    )
+
+
+class TestDomainSheet:
+    def test_no_domain_stat_gets_no_sheet(self):
+        wb = _build()
+        assert "Domain_Size" not in wb.sheetnames
+
+    def test_an_unsplit_sample_writes_one_row(self):
+        ws = _build(domain_stat=_unsplit_domain_stat())["Domain_Size"]
+        assert _column(ws, "Domains_N") == [59]
+        assert _column(ws, "Diameter_Mean") == [pytest.approx(68.56)]
+        assert "Population" not in _rows(ws)[0]
+
+    def test_a_split_sample_writes_two_rows(self):
+        ws = _build(domain_stat=_split_domain_stat())["Domain_Size"]
+        assert _column(ws, "Population") == ["Small", "Large"]
+        assert _column(ws, "Domains_N") == [745, 57]
+        assert _column(ws, "Diameter_Mean") == [pytest.approx(12.13), pytest.approx(70.83)]
+
+    def test_the_class_label_is_captioned_above_the_table(self):
+        ws = _build(
+            domain_stat=_unsplit_domain_stat(), domain_class_label="Above 1L",
+        )["Domain_Size"]
+        assert any("Above 1L" in str(value) for value in _cells(ws))
+        # The caption sits above the header, which sits above the row -- not
+        # collapsed onto row 1 the way the header-only sheet is.
+        assert _rows(ws)[0][0] != "Domains_N"
+
+    def test_no_class_label_still_renders_the_table(self):
+        ws = _build(domain_stat=_unsplit_domain_stat())["Domain_Size"]
+        assert _rows(ws)[0][0] == "Domains_N"
+
+    def test_calibrated_sample_writes_the_density_unrounded(self):
+        stat = _unsplit_domain_stat(unit="µm", calibrated=True)._replace(
+            area_um2=1000.0, density_per_100um2=590.0,
+        )
+        ws = _build(domain_stat=stat)["Domain_Size"]
+        assert _column(ws, "Density_per_100um2") == [pytest.approx(590.0)]
+
+    def test_uncalibrated_sample_leaves_density_blank(self):
+        ws = _build(domain_stat=_unsplit_domain_stat())["Domain_Size"]
+        assert _column(ws, "Density_per_100um2") == [None]
+
+    def test_split_sample_writes_each_populations_own_density(self):
+        stat = _split_domain_stat()._replace(
+            populations=(
+                SizePopulationStat("small", 745, 10.22, 12.13, 5.58, density_per_100um2=2960.0),
+                SizePopulationStat("large", 57, 66.44, 70.83, 17.72, density_per_100um2=35.9),
+            ),
+        )
+        ws = _build(domain_stat=stat)["Domain_Size"]
+        assert _column(ws, "Density_per_100um2") == [pytest.approx(2960.0), pytest.approx(35.9)]

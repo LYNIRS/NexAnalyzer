@@ -1,19 +1,25 @@
 """
-QC Report: one sample folder in, seven figures and a workbook out.
+QC Report: one sample folder in, eight figures and a workbook out.
 
 Pick a folder holding a 9-point Raman/PL/OM measurement grid, fit every
 spectrum against one material's presets, segment every frame, and produce:
 
   1 Summary            overview page — OM grid, its class table, Raman and PL
-                       fit-summary tables
+                       fit-summary tables, and the pooled domain-size table
   2 OM                 layer segmentation across the grid positions
   3 OM diagnostic      the same, plus the green-channel histograms showing
                        where each threshold landed
-  4 Raman              the nine fitted Raman spectra
-  5 Raman stats        fitted FWHM, peak centres and diagnostic ratios across
+  4 Domain size        flake domains split out of one OM class -- below,
+                       reference, or above the reference layer, operator's
+                       choice -- and measured, in microns where the
+                       magnification has a calibration set (Material Presets
+                       page), in pixels otherwise. Opt-in — off by default,
+                       roughly doubling optical analysis time when on
+  5 Raman              the nine fitted Raman spectra
+  6 Raman stats        fitted FWHM, peak centres and diagnostic ratios across
                        the positions, with the inherited spec lines drawn
-  6 PL                 the nine fitted PL spectra
-  7 PL stats           the same panels for PL
+  7 PL                 the nine fitted PL spectra
+  8 PL stats           the same panels for PL
 
 plus one .xlsx carrying every number behind them.
 
@@ -22,7 +28,7 @@ the same folder, ran the same scan and fit, and each produced half of what an
 operator wanted — so running both meant picking the same folder twice and
 fitting the same spectra twice. The .pptx the Sample Report used to build is
 gone with them, along with the PowerPoint COM rendering that rasterized it:
-the seven PNGs and the workbook are the deliverable now, and nothing here
+the eight PNGs and the workbook are the deliverable now, and nothing here
 needs PowerPoint installed.
 
 **One run.** One folder pick, one `run_sample_batch`, and every artifact
@@ -59,7 +65,15 @@ from PIL import Image
 
 from core.io.export import export_figure_png, prompt_save_path
 from core.io.folder_picker import prompt_folder_path
-from core.io.report_settings import load_default_material, save_default_material
+from core.io.om_calibration import get_um_per_px, load_om_calibration
+from core.io.report_settings import (
+    load_default_material,
+    load_measure_domain_size,
+    load_split_size_populations,
+    save_default_material,
+    save_measure_domain_size,
+    save_split_size_populations,
+)
 from core.report.progress import build as build_progress
 from core.report.summary_figure import (
     FIT_COLUMN_ASPECT_RATIO,
@@ -71,15 +85,18 @@ from modules.optical.io.frame_tables import frame_class_stats
 from modules.optical.processing.contrast import (
     REFERENCE_CHOICES,
     analyse_frame,
+    class_labels,
     class_summary,
     layer_word,
 )
+from modules.optical.processing.domain_size import TARGETS, domain_size_stat, measure_domains
 from modules.optical.ui.qc_report_state import (
     get_qc_report_state,
     reset_optical_results,
     reset_results,
     reset_spectra_results,
 )
+from modules.optical.viz.domain_grid import build_domain_grid_figure
 from modules.optical.viz.om_grid import build_om_grid_figure
 from modules.spectra.io.preset_store import load_presets
 from modules.spectra.io.results_excel import TechniqueResults, build_sample_results_xlsx
@@ -117,15 +134,16 @@ _ARTIFACTS = (
     (1, "Summary", "summary_png"),
     (2, "OM", "om_png"),
     (3, "OM_diagnostic", "om_diagnostic_png"),
-    (4, "Raman", "raman_grid_png"),
-    (5, "Raman_stats", "raman_stats_png"),
-    (6, "PL", "pl_grid_png"),
-    (7, "PL_stats", "pl_stats_png"),
+    (4, "Domain_size", "domain_grid_png"),
+    (5, "Raman", "raman_grid_png"),
+    (6, "Raman_stats", "raman_stats_png"),
+    (7, "PL", "pl_grid_png"),
+    (8, "PL_stats", "pl_stats_png"),
 )
 
 st.title("🔬 QC Report")
 st.markdown(
-    "Seven figures and one workbook from a sample folder's 9-point "
+    "Eight figures and one workbook from a sample folder's 9-point "
     "Raman + PL + OM measurement grid. Anything without data is skipped."
 )
 
@@ -197,15 +215,44 @@ if scan is not None:
     if reference != state.get("reference_layer"):
         state["reference_layer"] = reference
         reset_optical_results(state)
+
+    # classify() always treats the frame's most common pixel value as "the
+    # reference" -- reference (above) never reaches the threshold math, it
+    # only names the result. For a sparse-nucleation sample, bare substrate
+    # is that majority, not the film, so the classes come out mislabelled
+    # unless this says so.
+    low_coverage = st.checkbox(
+        f"Low coverage — most of the frame is substrate, not "
+        f"{layer_word(reference).lower()}",
+        value=state["low_coverage"],
+        help="Relabels the reference class \"Substrate\" and the brighter "
+             "class as the named film itself, instead of \"Above "
+             f"{reference}\" over what would really be substrate. Still two "
+             "populations underneath -- doesn't separate a thicker layer "
+             "from the named one if both sit above substrate in the same "
+             "frame.",
+    )
+    if low_coverage != state["low_coverage"]:
+        state["low_coverage"] = low_coverage
+        reset_optical_results(state)
+
     # Worth stating plainly: with identical tuning the segmentation is the same
     # either way, so a wrong choice here relabels every class by one layer with
     # no visible symptom in the figure.
-    st.caption(
-        f"Classes will be labelled **Below {reference}**, "
-        f"**{layer_word(reference)}**, **Above {reference}**. "
-        "The algorithm cannot infer this — a wrong choice mislabels every class "
-        "by one layer, and selects a different tuning block."
-    )
+    if low_coverage:
+        st.caption(
+            f"Classes will be labelled **Below Substrate**, **Substrate**, "
+            f"**{layer_word(reference)}** — the algorithm's reference is "
+            f"still the frame's majority population, now interpreted as "
+            f"substrate rather than {layer_word(reference).lower()}."
+        )
+    else:
+        st.caption(
+            f"Classes will be labelled **Below {reference}**, "
+            f"**{layer_word(reference)}**, **Above {reference}**. "
+            "The algorithm cannot infer this — a wrong choice mislabels every class "
+            "by one layer, and selects a different tuning block."
+        )
 
     # ------------------------------------------------------------- Material
     st.subheader("4. Material")
@@ -248,6 +295,85 @@ if scan is not None:
                     f"{layer_word(reference).lower()} films — running the "
                     f"algorithm's own defaults. Add a block on the "
                     f"**Material Presets** page to tune it."
+                )
+
+        # Domain-size measurement re-runs a segmentation-equivalent pass per
+        # frame plus watershed splitting on top -- progress.py's own weighting
+        # rates it as costing as much as segmentation itself, so it is opt-in
+        # rather than always-on, and remembered like the material choice above.
+        default_measure_domain_size = load_measure_domain_size()
+        measure_domain_size = st.checkbox(
+            "Measure domain size (adds a watershed segmentation pass, "
+            "roughly doubling optical analysis time)",
+            value=(
+                state["measure_domain_size"]
+                if state["measure_domain_size"] is not None
+                else default_measure_domain_size
+            ),
+        )
+        if measure_domain_size != state["measure_domain_size"]:
+            state["measure_domain_size"] = measure_domain_size
+            save_measure_domain_size(measure_domain_size)
+            reset_optical_results(state)
+
+        # Which of classify()'s three classes counts as "a domain" -- the
+        # same three the OM class table already names, so the wording here
+        # always matches it and updates automatically if the reference layer
+        # changes. Shares that reference layer rather than an independent
+        # one: a second choice of layer would mean a second, full
+        # segmentation-equivalent pass just for domain size.
+        domain_target_label = dict(
+            zip(TARGETS, class_labels(reference, state["low_coverage"]))
+        )
+        if measure_domain_size:
+            domain_target = st.radio(
+                "Which class is the domain?",
+                options=TARGETS,
+                index=TARGETS.index(state["domain_target"]),
+                format_func=lambda t: domain_target_label[t],
+                horizontal=True,
+            )
+            if domain_target != state["domain_target"]:
+                state["domain_target"] = domain_target
+                reset_optical_results(state)
+
+            # Off by default and remembered per installation, like domain-size
+            # measurement itself -- the split has fired on frames with no real
+            # second population at all (pure background texture), so an
+            # operator who hasn't asked for it should see the plain pooled
+            # measurement, not a split that may not be real.
+            default_split_populations = load_split_size_populations()
+            split_size_populations = st.checkbox(
+                "Split into small/large size populations",
+                value=(
+                    state["split_size_populations"]
+                    if state["split_size_populations"] is not None
+                    else default_split_populations
+                ),
+                help="Tests whether the domains split into a small and a "
+                     "large size population (at least a 2x gap in a KDE of "
+                     "the diameters), rather than reporting one pooled mean.",
+            )
+            if split_size_populations != state["split_size_populations"]:
+                state["split_size_populations"] = split_size_populations
+                save_split_size_populations(split_size_populations)
+                reset_optical_results(state)
+
+        # Domain-size calibration is keyed by magnification alone, not by
+        # material/layer like the optical tuning above — a 50x objective has
+        # the same field of view regardless of what film is under it.
+        um_per_px = get_um_per_px(load_om_calibration(), state["magnification"])
+        if measure_domain_size and state["magnification"]:
+            if um_per_px is not None:
+                st.caption(
+                    f"Domain size calibration for **{state['magnification']}**: "
+                    f"`{um_per_px:g}` µm/px."
+                )
+            else:
+                st.caption(
+                    f"No µm/px calibration set for **{state['magnification']}** — "
+                    f"domain sizes will be reported in pixels. Set one on the "
+                    f"**Material Presets** page."
                 )
 
         # Drop only what a preset edit invalidates. Editing a Raman peak must
@@ -369,6 +495,7 @@ if scan is not None:
                         has_pl=will_fit_pl,
                         has_optical=bool(om_paths),
                         has_segmentation=has_segmentation,
+                        has_domain_size=state["measure_domain_size"],
                         fit_spectra=sum(count_spectra(path) for path in fit_files),
                     )
 
@@ -415,7 +542,7 @@ if scan is not None:
                             # whole run — including the Raman and PL halves,
                             # which have nothing to do with it. Before the
                             # merge that only cost the QC Panel's two images;
-                            # now it would cost all seven figures and the
+                            # now it would cost all eight figures and the
                             # workbook, so a bad frame drops out and the rest
                             # of the sample still reports.
                             try:
@@ -423,6 +550,7 @@ if scan is not None:
                                     om_paths[point], point=point,
                                     ref_label=state["reference_layer"],
                                     name=f"{state['magnification']}-{point}",
+                                    low_coverage=state["low_coverage"],
                                     **om_kwargs,
                                 ))
                             except Exception as e:
@@ -455,6 +583,54 @@ if scan is not None:
                                 "figures and sheets are omitted."
                             )
                         progress.complete("om_figures")
+
+                        # --------------------------------------- Domain size
+                        # Same `om_kwargs` the segmentation above used: the
+                        # mask this re-derives is the same population the OM
+                        # figure's overlay already shows, and measuring it
+                        # with different tuning would make the two figures
+                        # disagree about the same frames.
+                        if frames and state["measure_domain_size"]:
+                            progress.start("domain_size", detail=f"0/{len(frames)}")
+                            domain_results = []
+                            for done, frame in enumerate(frames, start=1):
+                                try:
+                                    domain_results.append(measure_domains(
+                                        frame, um_per_px=um_per_px,
+                                        target=state["domain_target"],
+                                        marker_margin_sigma=(
+                                            optical.marker_margin_sigma if optical else None
+                                        ),
+                                        marker_min_distance=(
+                                            optical.marker_min_distance if optical else None
+                                        ),
+                                        mask_closing_radius=(
+                                            optical.mask_closing_radius if optical else None
+                                        ),
+                                        detect_size_populations=state["split_size_populations"],
+                                        **om_kwargs,
+                                    ))
+                                except Exception as e:
+                                    st.warning(
+                                        f"Could not measure domains for point "
+                                        f"{frame.point}: {e}"
+                                    )
+                                progress.tick("domain_size", done, len(frames))
+                            state["domain_results"] = domain_results
+                            state["domain_stat"] = domain_size_stat(
+                                domain_results,
+                                detect_size_populations=state["split_size_populations"],
+                            )
+                            if domain_results:
+                                state["domain_grid_png"] = build_domain_grid_figure(
+                                    frames, domain_results,
+                                    sample_name=scan.sample_name,
+                                    magnification=state["magnification"],
+                                    class_label=dict(zip(
+                                        TARGETS, class_labels(reference, state["low_coverage"])
+                                    ))[state["domain_target"]],
+                                )
+                            progress.complete("domain_size")
 
                     # ---------------------------------------------- Fitting
                     has_spectra = will_fit_raman or will_fit_pl
@@ -663,6 +839,13 @@ if scan is not None:
                         raman_stats=state["raman_stats"],
                         pl_stats=state["pl_stats"],
                         raman_ratios=state["raman_ratios"],
+                        domain_stat=state["domain_stat"],
+                        domain_class_label=(
+                            dict(zip(TARGETS, class_labels(
+                                state["reference_layer"], state["low_coverage"]
+                            )))[state["domain_target"]]
+                            if state["measure_domain_size"] else None
+                        ),
                         show_fwhm_v1=show_fwhm_v1,
                     )
 
@@ -699,6 +882,13 @@ if scan is not None:
                             techniques=techniques,
                             optical_frames=state["frames"] or (),
                             optical_threshold_pair=state["optical_threshold_pair"],
+                            domain_stat=state["domain_stat"],
+                            domain_class_label=(
+                                dict(zip(
+                                    TARGETS, class_labels(reference, state["low_coverage"])
+                                ))[state["domain_target"]]
+                                if state["domain_stat"] else None
+                            ),
                             show_fwhm_v1=show_fwhm_v1,
                         )
                     progress.complete("compose")
@@ -757,7 +947,7 @@ if _HAS_RESULTS:
 
     # Inline: the overview and the two OM figures — the ones you look at every
     # run. The fitted spectra and the stats panels go behind expanders: they
-    # are what you open when something looks wrong, and seven figures of this
+    # are what you open when something looks wrong, and eight figures of this
     # size stacked would bury the summary under a page of scrolling. Tabs would
     # hide the OM grid well enough to miss a bad one by never clicking.
     if state.get("summary_png"):
@@ -784,11 +974,50 @@ if _HAS_RESULTS:
             )
             st.image(state["om_diagnostic_png"], width="stretch")
 
+    if state.get("domain_grid_png"):
+        with st.expander("4 — Domain size analysis"):
+            stat = state.get("domain_stat")
+            class_label = dict(zip(TARGETS, class_labels(
+                state["reference_layer"], state["low_coverage"]
+            )))[state["domain_target"]]
+            if stat is not None:
+                if stat.populations:
+                    small, large = stat.populations
+                    population_line = (
+                        f"small: n={small.n}, {small.diameter_mean:.2f} ± "
+                        f"{small.diameter_std:.2f} {stat.unit}  \n"
+                        f"large: n={large.n}, {large.diameter_mean:.2f} ± "
+                        f"{large.diameter_std:.2f} {stat.unit}"
+                    )
+                    if small.density_per_100um2 is not None:
+                        population_line += (
+                            f"  \nsmall: {small.density_per_100um2:.1f}/(100µm)² "
+                            f"· large: {large.density_per_100um2:.1f}/(100µm)²"
+                        )
+                else:
+                    population_line = (
+                        f"median {stat.diameter_median:.2f} {stat.unit} "
+                        f"· mean {stat.diameter_mean:.2f} ± {stat.diameter_std:.2f} {stat.unit}"
+                    )
+                    if stat.density_per_100um2 is not None:
+                        population_line += f"  \n{stat.density_per_100um2:.1f}/(100µm)²"
+                st.caption(
+                    f"**{class_label}** — {stat.n_domains} domains across "
+                    f"{stat.n_frames} frames "
+                    f"· {population_line}"
+                    + ("" if stat.calibrated else
+                       " — no µm/px calibration set for this magnification; "
+                       "sizes shown in pixels.")
+                )
+            else:
+                st.caption(f"**{class_label}** — no domains found.")
+            st.image(state["domain_grid_png"], width="stretch")
+
     for number, caption, key in (
-        (4, "Raman — fitted spectra", "raman_grid_png"),
-        (5, "Raman — quality panels", "raman_stats_png"),
-        (6, "PL — fitted spectra", "pl_grid_png"),
-        (7, "PL — quality panels", "pl_stats_png"),
+        (5, "Raman — fitted spectra", "raman_grid_png"),
+        (6, "Raman — quality panels", "raman_stats_png"),
+        (7, "PL — fitted spectra", "pl_grid_png"),
+        (8, "PL — quality panels", "pl_stats_png"),
     ):
         if state.get(key):
             with st.expander(f"{number} — {caption}"):
