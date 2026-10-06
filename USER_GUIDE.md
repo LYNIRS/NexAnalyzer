@@ -437,8 +437,19 @@ NexAnalyzer accepts **two-column .txt files**:
 
 - **Column 1**: Wavenumber (cm⁻¹) or Wavelength (nm)
 - **Column 2**: Intensity
-- **Delimiter**: Tab or comma
-- **No header row**
+- **Delimiter**: Tab, comma, semicolon or spaces
+- **Header**: optional. Lines above the numbers (column names, acquisition
+  settings, section markers) and below them (end markers) are skipped:
+
+```
+Raman shift (cm-1)	Intensity (a.u.)
+120.5	1523.2
+121.0	1540.8
+...
+```
+
+A header line that is itself two numbers (for example `532	600`) can't be told
+apart from data, and will be read as the first point.
 
 ---
 

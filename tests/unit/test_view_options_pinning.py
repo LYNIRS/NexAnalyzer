@@ -170,6 +170,7 @@ class TestTheWritersAgreeAtTheFitStage:
         assert fallback["residuals"] == stage["show_residuals"] is True
         assert fallback["fit_total"] == stage["show_fit"] is True
         assert fallback["baseline_corrected"] == stage["show_corrected"] is True
+        assert fallback["on_background"] == stage["show_on_background"] is True
 
     def test_the_fallback_names_residuals(self):
         """It omitted the key entirely, so the residuals layer could only ever
@@ -216,3 +217,18 @@ class TestTheResetIsDeferredToTheNextRun:
         st.session_state["_pending_view_options_reset"] = True
         sync_pending_view_options()  # must not raise
         assert "_pending_view_options_reset" not in st.session_state
+
+
+class TestStartingViewOptions:
+    def test_a_new_session_starts_on_the_fitted_spectrum_view(self):
+        """Since v5.12.0 the View Options open as a finished fit shows them:
+        baseline-corrected, fit, components and residuals; no raw/de-spiked."""
+        assert {k: st.session_state[k] for k in VIEW_OPTION_KEYS} == {
+            "show_raw": False,
+            "show_despiked": False,
+            "show_corrected": True,
+            "show_fit": True,
+            "show_components": True,
+            "show_residuals": True,
+            "show_on_background": True,
+        }

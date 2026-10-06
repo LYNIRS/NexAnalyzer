@@ -39,14 +39,21 @@ PROCESSED_COLOR = "#800080"  # CSS "purple"
 # anyway so that it can be seen not to collide with the shared colors above.
 RAW_COLOR = "#0000FF"  # CSS "blue"
 
-# The summed fit. Dashed so it stays readable where it sits on top of the data
-# it is fitting, which is most of its length.
+# The summed fit. Solid black since v5.12.0 (dashed before): the components are
+# colored, so black alone tells the fit apart from them, and a solid line reads
+# better where it sits on top of the data, which is most of its length.
 FIT_TOTAL_COLOR = "#000000"  # CSS "black"
-FIT_TOTAL_DASH = "dash"
+FIT_TOTAL_DASH = "solid"
 
 # Data minus fit. Green, and never the same color as the fit or the data, since
 # the whole point of the panel is telling them apart.
 RESIDUAL_COLOR = "#008000"  # CSS "green"
+
+# The subtracted baseline, drawn when the fit is shown sitting on the
+# background (v5.13.0) — the Spectra page's "Peaks on background" view and the
+# Quick Export that mirrors it. Gray: it is context, not a result, and a hue
+# here would compete with the preset colors the components are drawn in.
+BACKGROUND_COLOR = "#808080"  # CSS "gray"
 
 # Individual fitted peaks keep their own `FittedPeak.color`; only the style is
 # shared. Solid, so the dashed total fit reads as the distinct thing, and

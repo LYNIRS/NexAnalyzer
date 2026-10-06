@@ -306,10 +306,19 @@ class TestTheShippedStoreIsAlreadyV2:
           one renamed. Its peaks are identical -- that is exactly why the fold
           was safe, and it is what the assertion below still proves -- but it
           carries HA's description explaining its fixed-contrast optical block.
+
+        MoS2's `raman` and `pl` are excluded as well: at v5.10.2 its Raman block
+        was retuned and a PL block added, both fitted against HA1N01 and 02N01
+        spectra, so its v1 Raman block no longer describes it. WSe2's `raman`
+        and `pl` are excluded too: at v5.10.5 its Raman despike threshold went
+        from 8 to 100, and at v5.10.3 its Exciton/Trion windows moved from
+        770/800 to 755/780, because monolayer emission sat against the old
+        windows' blue edges.
         """
         migrated, _ = migrate_legacy(V1_STORE)
         by_name = {e["material_name"]: e for e in migrated}
         post_migration_edits = ("optical", "description")
+        retuned = {"MoS2": ("raman", "pl"), "WSe2": ("raman", "pl")}
 
         with open(DATA_DIR / "materials.json", encoding="utf-8") as f:
             committed = json.load(f)["materials"]
@@ -318,8 +327,9 @@ class TestTheShippedStoreIsAlreadyV2:
             name = entry["material_name"]
             if name not in by_name:
                 continue  # a material added since the migration
-            theirs = {k: v for k, v in entry.items() if k not in post_migration_edits}
-            mine = {k: v for k, v in by_name[name].items() if k not in post_migration_edits}
+            skip = post_migration_edits + retuned.get(name, ())
+            theirs = {k: v for k, v in entry.items() if k not in skip}
+            mine = {k: v for k, v in by_name[name].items() if k not in skip}
             assert (MaterialPreset.from_dict(mine).to_dict()
                     == MaterialPreset.from_dict(theirs).to_dict()), name
 

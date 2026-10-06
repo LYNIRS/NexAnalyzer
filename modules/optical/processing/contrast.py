@@ -429,16 +429,29 @@ def class_summary(frames: Sequence[FrameResult]) -> Tuple[Tuple[float, float], .
     return tuple(_across_frames(pcts[:, i]) for i in range(3))
 
 
-def contrast_summary(frames: Sequence[FrameResult]) -> Tuple[Tuple[float, float], ...]:
+def contrast_summary(
+    frames: Sequence[FrameResult],
+) -> Tuple[Optional[Tuple[float, float]], ...]:
     """(mean, std) green contrast for the below and above classes, in that order.
 
     Two entries, not three: contrast is measured *relative to* the reference
     film, so the reference class has none of its own. Aggregated the same way
     as `class_summary`, and returned beside it by the CSV export.
+
+    Only frames where the class exists contribute. A frame with no pixels in a
+    class records its contrast as nan, which used to make the whole wafer's
+    figure nan -- SU261001 printed "nan ± nan" for Above 1L because a few of
+    its nine frames had no above-class pixels. An entry is None when no frame
+    has the class at all, which the summary table and workbook render as empty.
     """
     if not frames:
         return ((0.0, 0.0),) * 2
+
+    def _present(values):
+        finite = [v for v in values if np.isfinite(v)]
+        return _across_frames(finite) if finite else None
+
     return (
-        _across_frames([f.contrast_below for f in frames]),
-        _across_frames([f.contrast_above for f in frames]),
+        _present([f.contrast_below for f in frames]),
+        _present([f.contrast_above for f in frames]),
     )

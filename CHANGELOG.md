@@ -5,14 +5,16 @@ All notable changes to NexAnalyzer will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Local additions (on top of 5.10.5)
+## Local additions (on top of 5.13.0)
 
 Installation-specific changes carried on top of upstream. They were first
 numbered 5.3.1-5.6.1 on a v5.3.0 checkout, which collides with upstream's own
 5.4.0-5.6.0, so the numbers below are kept only as labels. Merged onto 5.10.5
 on 2026-10-02 following upstream's 5.6.0 removal of the per-wafer adaptive
 threshold: domain size and nucleation density now segment on the preset's
-fixed pair, like every other OM figure.
+fixed pair, like every other OM figure. Re-merged onto 5.13.0 on 2026-10-06;
+the WSe2 Raman range and iteration budget follow upstream (-5-500 cm-1, 10000),
+with 200-300 cm-1 now upstream's own WSe2_truncate preset.
 
 ### Local 5.6.2 - 2026-10-03
 
@@ -209,6 +211,146 @@ fixed pair, like every other OM figure.
   different remote (a personal fork added later, say) without any error. The
   pull then "succeeds" against the wrong repo every launch, reporting
   up to date while the real repo moves on. Pinned to `git pull --ff-only origin main`.
+## [5.13.0] - 2026-10-06
+
+### Added
+
+- **Peaks on Background** (View Options, on by default after a fit): the
+  Spectra plot draws the subtracted baseline as a gray line and lifts the data,
+  the total fit and every component onto it, so the peaks are seen sitting on
+  the background they were separated from, as in a fitted XPS figure. The data
+  shown is the de-spiked spectrum (baseline-corrected + background), labelled
+  "Data". Quick Export's PNG/HTML follow the toggle.
+- **Residuals have their own panel** under the Spectra plot, sharing its X axis
+  (zoom one, both follow), as Quick Export already drew them. On the same axis
+  as data lifted onto a ~500-count background they squashed the peaks to a
+  sliver. The plot grows from 600 to 760 px when the panel is shown.
+  **No numbers move**: only what's drawn changes; the fit, CSVs, Excel and
+  reports are unchanged, and the QC/Sample Report grids still draw
+  baseline-corrected.
+- The auto-workflow now keeps the baseline it subtracts
+  (`SpectrumFile.background`, saved with projects). Files fitted before this
+  version, or projects saved before it, have none and show the
+  baseline-corrected view with a note to re-run.
+
+## [5.12.1] - 2026-10-05
+
+### Changed
+
+- **`2ZA(M)` starts at 2.0 cm-1 FWHM (was 4.0) in `WSe2` and
+  `WSe2_truncate`.** The fitter bounds a width to 0.5-3x its start, so this
+  caps 2ZA(M)'s Voigt FWHM at ~4.9 cm-1. At 4.0 the cap was ~9.8 and 2ZA(M)
+  sat on it in over 75% of TSMC_May spectra, acting as a broad base that
+  took E2g+A1g's low-side wing; capped, it fits at 4.4-4.8 cm-1 centred
+  243-244, the De Luca 244.2 band. **WSe2's numbers move**: on TSMC_May the
+  E2g+A1g FWHM median rises ~0.3-0.4 cm-1 against the 4.0 start (e.g.
+  TSM260500 4.08 -> 4.41).
+- **`WSe2` Raman x range is -5 to 500** (was 200-300 at v5.12.0), edited on the
+  Material Presets page, so LA, B2g, LB, C and center are fitted on data again
+  and the LA/E2g+A1g ratio is meaningful.
+
+### Added
+
+- **A `WSe2_truncate` preset**: `WSe2` with the Raman window at 200-300 cm-1,
+  for the E2g+A1g / 2LA / 2ZA(M) region only. Peaks outside the window are
+  carried but meaningless there. Added on the Material Presets page.
+
+## [5.12.0] - 2026-10-05
+
+### Added
+
+- **`2ZA(M)` in the `WSe2` preset** (244.2 cm-1, +/-4, FWHM 4), for the
+  shoulder on the low side of E2g+A1g; the band is De Luca et al.'s Table 1
+  244.2 peak, as in `WSe2 extended`. **WSe2's numbers move**: E2g+A1g no
+  longer absorbs the shoulder, so its FWHM narrows and its center can shift.
+  Its +/-7 window overlaps 2ZA(M)'s, so on spectra without a shoulder 2ZA(M)
+  may fit near zero.
+
+### Changed
+
+- **`WSe2` and `WSe2 extended` Raman**, edited on the Material Presets page:
+  x range 6-400 -> 200-300, ALS baseline p 0.02 -> 0.005, max_iterations
+  2000 -> 10000. **Numbers move.** With 200-300, B2g, LA, LB, C and center
+  (and `WSe2 extended`'s LA and LO2(K)-ZA(K)) lie outside the fitted range,
+  so their values, and the LA/E2g+A1g ratio, are not meaningful there.
+- **The Fit Total line is solid black, not dashed.** The style is shared, so
+  this applies to the Spectra page plot and the exported fit figures alike. On
+  the Spectra page it is also 1 px wider (1.5 -> 2.5). The components keep
+  their own colors, so black alone tells the fit apart from them. Display
+  only: no numbers move.
+- **View Options start on the fitted-spectrum view**: Show Baseline-corrected,
+  Fit, Components and Residuals on; Raw and De-spiked off (was Raw only). This
+  is the set a finished fit already derives; earlier stages still pick their
+  own layers until you set one by hand.
+
+## [5.11.0] - 2026-10-03
+
+### Added
+
+- **Spectrum files with a header now load.** Before, any non-numeric line
+  failed the whole file with "Ensure file contains only numeric data with no
+  header row". The parser (`modules/spectra/processing/parser.py`) now takes
+  the data to start at the first row of two or more numbers that the next four
+  non-blank rows confirm. Everything above that row is skipped as header, and
+  everything after the last numeric row as footer. That covers a row of column
+  names (`Raman shift (cm-1)<TAB>Intensity (a.u.)`), `#key=value` acquisition
+  blocks, `[Header]`/`[Data]` sections and `>>>>>Begin/End Spectral Data<<<<<`
+  markers without recognising any of them by name.
+- Semicolon is accepted as a delimiter, after tab and comma and before
+  whitespace.
+- Files are decoded as UTF-8 (with or without BOM), UTF-16 by its BOM, or
+  Windows-1252. Before, a "µ" or "°" in a cp1252 header failed the parse with
+  a misleading "must have at least 2 columns".
+
+### Changed
+
+- A column that is empty in every row, left by a delimiter at the end of each
+  line, is dropped instead of being reported as an unusable Y column.
+
+No numbers move. On 400 headerless RM/PL files under Data Collection and
+Sample Requests the new parser returns identical arrays to the old one, about
+5x faster (1.9 s against 9.5 s). Of the .txt files there that start with a
+non-numeric line, the only spectrum is the digitized TSMC spec file, which now
+loads. The rest (OM `_Analyzed.txt` tables, logs, JEOL SEM metadata) still
+fail, with "No rows of numbers found".
+
+A header line that is itself a row of numbers (`532<TAB>600`) directly above
+the data is read as the first point; a lone number (`1024`) is skipped.
+
+## [5.10.6] - 2026-10-02
+
+### Fixed
+
+- **The QC Report's PL quality figure is no longer empty for MoS2.** Its
+  cleaning kept only PL peaks centred above 700 nm, a constant inherited from
+  WSe2's emission band, so every MoS2 peak (A0, A-, B at 620–680 nm) was
+  discarded and each panel read "no fits". That floor is gone. It never
+  removed a WSe2 fit: the fitter's centre bounds keep every WSe2 PL peak above
+  740 nm.
+- **A PL peak fitted to near zero is left out of the PL figure and the PL
+  summary table.** A peak under 2% of the strongest peak in the same spectrum
+  still reports a centre and a width, but they describe nothing. On
+  SU261001/SU261002, A0 fits to zero on 3 of 9 points, and the table averaged
+  those meaningless centres in (A0 664.9 ± 8.8 nm, n = 9).
+  - One constant, `peak_metrics.NEAR_ZERO_FRACTION` (0.02), feeds both the
+    figure's cleaning (`CleaningRule.relative_intensity_floor`) and the table
+    (`aggregate_fit_results(relative_intensity_floor=...)`). So the table's
+    `n` and the figure's points count the same peaks.
+  - Such a peak is skipped whole. `n` now counts the points where the peak
+    was found, and its intensity mean is over those points.
+  - The floor is per spectrum: a dim point is judged against itself, not
+    against the wafer's brightest.
+  - The workbook's per-point PL sheet still lists every fitted peak.
+- **The OM summary no longer prints "nan ± nan" for a class some frames lack.**
+  A frame with no pixels in a class records its contrast as nan, and the
+  wafer mean took it in. On SU261001, a few of the nine frames have no
+  "Above 1L" pixels. The mean is now over the frames that have the class, and
+  it is empty when no frame has it.
+
+Numbers move only in the PL summary table and the PL figure (near-zero peaks
+leave both), and in the OM contrast cells that used to read nan. Raman,
+coverage and the per-point sheets are unchanged. For WSe2, a Trion fitted to
+under 2% of its Exciton now leaves the table and figure as well.
 
 ## [5.10.5] - 2026-10-02
 
@@ -236,6 +378,142 @@ fixed pair, like every other OM figure.
 WSe2 Raman numbers move: E2g's top is no longer flattened, so its intensity
 and the ratios built on it change. The size of the shift on fitted values is
 not yet measured. MoS2 and Silicon are untouched.
+
+## [5.10.4] - 2026-10-02
+
+### Changed
+
+- **`WSe2 extended V2` now sits at the measured frequencies, keeps the
+  E2g/A1g split, and has a 5000-evaluation fit budget.** It is still the
+  preset for checking the split fit; tuned on TSMC_May TSM260500 (900
+  spectra).
+  - The multi-phonon bands, LA and LO2(K)-ZA(K) move from the calculated
+    column of De Luca et al. Table 1 to the measured one (the frequencies
+    `WSe2 extended` uses). At the calculated positions, peaks sat on a centre
+    limit in up to 12% of fits (TO1(K)), 10% (TA(M)+LA(M)), 8% (LA) and 7%
+    (E2g).
+  - E2g and A1g move from 250.8 / 251.3 ± 1.5 to 249.65 / 250.15 ± 2.0. That
+    keeps the calculated 0.5 cm⁻¹ split, centred on the measured 249.9. The
+    ± 2 covers TSM260504, whose first-order mode sits near 251.4. On
+    TSM260500 the two are never on a limit and swap order in 1 of 900 fits.
+    Their individual intensities and widths remain poorly determined, but the
+    width of their summed curve is stable: median 5.40 cm⁻¹, against 6.31 for
+    `WSe2`.
+  - LA becomes the broad ~125 cm⁻¹ band: FWHM 20 ± 10, up from 4 ± 4. With
+    the old values it sat on its width ceiling (9.8 cm⁻¹) in 28% of fits. Now
+    it reaches the ceiling (≈ 49) in 15% and its centre limit in 1%.
+  - LO2(K)-ZA(K) starts at FWHM 8, ± 6, up from 4 ± 4; the ± 6 takes it off
+    its centre limit (7.6% of fits at ± 4, 1.4% at ± 6). C starts at FWHM 8, up
+    from 5. C still reaches its ceiling (≈ 20) in 11% of fits. Starting C at
+    10 halves that, but then C takes LB's signal: LB is fitted at zero in 9%
+    of fits instead of 5%.
+  - `max_iterations` goes from 2000 to 5000. At 2000, 46% of fits stopped at
+    the budget; at 5000, 23% still do. Such fits are still reported as
+    successful (`fitting.py` accepts lmfit's "Tolerance seems to be too
+    small" message, which is also what a budget stop leaves).
+  - On TSM260500, R² rises from 0.869 to 0.897, and the 100–160 cm⁻¹
+    residual falls to 0.28× of the old one.
+  - Four bands are below the noise there: TO1(K), TA(K)+ZA(K), ZA(K)+LA(K)
+    and ZO2(M), at 0.2–1.5× the noise, fitted at zero in 3–49% of fits.
+    They stay in, at their measured positions, but their numbers mean
+    nothing on that wafer.
+
+`WSe2 extended V2` numbers move. `WSe2` and `WSe2 extended` are untouched.
+
+## [5.10.3] - 2026-10-02
+
+### Changed
+
+- **`WSe2` PL windows move from Exciton 770 ± 15 / Trion 800 ± 15 to
+  Exciton 755 ± 15 / Trion 780 ± 15 nm, and the Trion's starting FWHM goes
+  from 50 to 40.** On monolayer HU261001, points 1 and 3 peak at 749 and
+  751 nm. That is below the old Exciton window (755–785), so the Exciton sat
+  pinned at 755, the fitted curve ran to the right of the data (R² 0.979), and
+  the Trion, unable to go below 785, fitted to zero. Now R² is 0.9994 and both
+  peaks are present.
+  - Across 63 spectra from eight WSe2 sets (HU261001–3, NUS261001, SU261003,
+    HADH72, HADI05), peaks on a window edge drop from 47 of 126 to 26, the
+    worst R² rises from 0.978 to 0.992, and the Exciton and Trion never swap.
+  - The 26 that remain are all the Trion sitting on its new 765 nm floor. At
+    room temperature these spectra don't resolve a separate trion, so the
+    Trion settles as close to the Exciton as its window allows, and that
+    floor is what keeps the two about 10 nm (≈ 22 meV) apart. Windows that
+    free it let the two collapse to within 4 nm, so treat the Trion centre as
+    constrained rather than measured. The old 785 floor forced a split of at
+    least 30 nm (≈ 65 meV), too large for a trion.
+  - `WSe2 extended` and `WSe2 extended V2` keep the old 770/800 PL windows.
+
+WSe2 PL numbers move. That includes HA1P01 wafers: HADI05's Trion goes from
+791 to 765 nm and its share from 0.00 to 0.19, and HADH72's Exciton FWHM from
+30 to 26 nm. Raman, OM, MoS2 and Silicon are untouched.
+
+## [5.10.2] - 2026-10-02
+
+### Changed
+
+- **MoS2 has a PL block, and its Raman block is retuned.** Both were fitted
+  against the monolayer-on-sapphire spectra in HA1N01 (2504–2508), 02N01 and
+  VM1N01, converted from the 488 nm exports' wavelength axis.
+  - **Raman** is cropped to 340–480 cm⁻¹ and fits `E2g` 384 ± 6, `A1g` 405 ± 6
+    and `2LA(M)` 455 ± 15. The old block fitted the whole exported range
+    (−500 to +1200 cm⁻¹) and started from bulk positions (383/408) with
+    10–12 cm⁻¹ widths. Measured widths are 5.7 and 7.1, so `width_fwhm` is now
+    6 and 7, which also sets the fit's 0.5×–3× width bounds. `2LA(M)` is fitted
+    because its band sits on A1g's high side, the same reason WSe2 fits `2LA`.
+    The baseline exclusions are gone; masking let `2LA(M)` run wide.
+  - **PL** is cropped to 540–800 nm, masks 590–760 nm from the ALS baseline
+    (unmasked, the baseline ate the emission), and fits `A0` 662 ± 20,
+    `A-` 680 ± 20 and `B` 620 ± 20 nm. The A0/A- windows overlap, and across
+    188 spectra the fit never swapped them. The median split is 10.4 nm
+    (≈ 29 meV), the trion binding energy.
+  - **Optical**: a `1L` block with `ff_divisor` 12. At the default /8, the
+    flat-field blur leaves the corner vignetting of 50X rectangular frames
+    about 1 % dark, which the 4σ cut (about −1.4 % at these frames' noise)
+    counted as "Below 1L": 0.13–0.96 % per wafer. At /12 that falls to
+    0.01–0.08 % on SU261001, SU261002, HU261004 and HU261005. Uniform patches
+    up to 200 px are still fully recovered at /12; a 350 px patch is 94–96 %
+    recovered. Every other optical setting stays at `contrast.py`'s default.
+    There is no fixed contrast pair, because no frame yet shows bare sapphire
+    or a 2L island to set it from.
+
+  Both spectra blocks were checked again on the Witec cm⁻¹ exports of those
+  four wafers (33 Raman and 30 PL spectra). Raman: R² 0.97–0.995 with no
+  peak at a bound. PL: R² ≥ 0.997, but on the red-shifted SU wafers (emission
+  at 675–695 nm) `A0` often fits to zero and `A-` carries the peak. Read the
+  A0/A- split there with care.
+
+  Peaks are deliberately not named `LA`, `C`, `LB`, `2LA`, `Exciton` or
+  `Trion`. `QualityFigureSpec.columns_for` keeps WSe2's inherited panels,
+  spec lines included, whenever any one of those labels is present, so a
+  MoS2 Raman fit named `LA` would render WSe2's mostly empty figure.
+
+MoS2 numbers move: every MoS2 Raman centre, width and intensity changes, PL
+is newly fittable, and the 1L OM coverage moves (false "Below 1L" falls by
+about an order of magnitude). WSe2, its extended presets and Silicon are
+untouched.
+
+## [5.10.1] - 2026-10-02
+
+### Fixed
+
+- **The OneNote page's "Found on disk" ticks now follow the selected wafer.**
+  They were set once per session, by the first wafer picked. A keyed checkbox
+  is identified by its key alone, so `value=` is only its first render's
+  default, and the three keys never changed between wafers. Picking a wafer
+  with no runcard or datalog and then HADH78 showed HADH78's filenames —
+  `HADH78.csv`, `2026-09-21_121151~HADH78.csv` — beside empty boxes, which
+  read as "not found". The lookup was always right; only the ticks were stale.
+  The page now writes each tick to its key on every run.
+
+- **A second wafer picked straight after the first no longer snaps back.**
+  The Wafer dropdown had no key, so its identity included its `index`, and
+  that index came from the wafer chosen on the previous run. The second pick
+  arrived for a widget that no longer existed and was dropped. The dropdown is
+  now keyed and seeded only when its key is absent or names a wafer the
+  current tool doesn't list.
+
+No numbers move: nothing here is computed, and the page still publishes
+nothing.
 
 ## [5.10.0] - 2026-10-02
 

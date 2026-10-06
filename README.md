@@ -131,11 +131,15 @@ package under `modules/` and registering its pages in `app.py` — nothing in `c
 
 ### Input file format
 
-Two-column (or multi-Y) `.txt` files, no header:
+Two-column (or multi-Y) `.txt` files:
 
 - Column 1: Wavenumber (cm⁻¹) or wavelength (nm)
 - Column 2+: Intensity — one column for standard files, several for multi-Y acquisitions
-- Delimiter: tab, comma, or whitespace (auto-detected)
+- Delimiter: tab, comma, semicolon, or whitespace (auto-detected)
+- Header: optional — column names, `#key=value` settings, `[Header]` sections or
+  begin/end markers above or below the numbers are skipped. The data starts at
+  the first row of two or more numbers.
+- Encoding: UTF-8, UTF-16 or Windows-1252
 
 ---
 

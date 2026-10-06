@@ -18,6 +18,7 @@ from plotly.subplots import make_subplots
 # Data and total-fit colors, named because a legend drawn outside these figures
 # (the QC Report draws one per grid page) has to match the lines it describes.
 from .palette import (  # noqa: F401  (re-exported for callers)
+    BACKGROUND_COLOR,
     COMPONENT_DASH,
     COMPONENT_OPACITY,
     FIT_TOTAL_COLOR,
@@ -86,19 +87,28 @@ def _add_spectrum_traces(
     fit_line_px: float,
     component_line_px: float,
     scale: float = 1.0,
+    background: Optional[np.ndarray] = None,
 ) -> None:
     """
     Add one spectrum's data, total fit and peak components to `row` of `fig`.
 
     `scale` divides every Y series, so data and fit stay superimposed however
     the spectrum is normalized (see `peak_normalization_scale`).
+
+    `background`, when given, is the baseline that was subtracted before the
+    fit. It is drawn as its own line and added back under the data, the total
+    fit and every component, so the peaks sit on the background they were
+    separated from rather than on zero. The data then is the de-spiked
+    spectrum, before baseline removal.
     """
+    offset = np.asarray(background) if background is not None else 0.0
+
     # Baseline-corrected data — the series that was actually fitted, and the
     # same one the Spectra page draws as its "Baseline-corrected" layer, so it
     # takes that layer's color rather than the raw file's.
     fig.add_trace(go.Scatter(
         x=x,
-        y=np.asarray(y_data) / scale,
+        y=(np.asarray(y_data) + offset) / scale,
         mode='markers',
         name='Data',
         marker=dict(size=marker_px, color=PROCESSED_COLOR),
@@ -107,13 +117,14 @@ def _add_spectrum_traces(
     ), row=row, col=1)
 
     if not (fit_result and getattr(fit_result, "total_fit_curve", None) is not None):
+        _add_background_trace(fig, row, x, background, x_label, showlegend, fit_line_px, scale)
         return
 
     # Total fit: the sum of all Voigt components, compared against the data by
     # eye to judge R².
     fig.add_trace(go.Scatter(
         x=x,
-        y=np.asarray(fit_result.total_fit_curve) / scale,
+        y=(np.asarray(fit_result.total_fit_curve) + offset) / scale,
         mode='lines',
         name='Total Fit',
         line=dict(width=fit_line_px, color=FIT_TOTAL_COLOR, dash=FIT_TOTAL_DASH),
@@ -129,7 +140,7 @@ def _add_spectrum_traces(
                 continue
             fig.add_trace(go.Scatter(
                 x=x,
-                y=np.asarray(peak.component_curve) / scale,
+                y=(np.asarray(peak.component_curve) + offset) / scale,
                 mode='lines',
                 name=peak.label or f"Peak {i+1}",
                 # The peak's own color from its Material Preset, rather than
@@ -141,6 +152,29 @@ def _add_spectrum_traces(
                 showlegend=showlegend,
                 hovertemplate=f'{x_label}: %{{x:.2f}}<br>Component: %{{y:.3g}}<extra></extra>'
             ), row=row, col=1)
+
+    _add_background_trace(fig, row, x, background, x_label, showlegend, fit_line_px, scale)
+
+
+def _add_background_trace(fig, row, x, background, x_label, showlegend, line_px, scale) -> None:
+    """The subtracted baseline as a gray line, or nothing without one.
+
+    Drawn after the components but ranked first in the legend: a peak the fit
+    resolved to nothing (WSe2's C and center, often) is a flat line lying
+    exactly on the background, and drawn first the background vanished under it.
+    """
+    if background is None:
+        return
+    fig.add_trace(go.Scatter(
+        x=x,
+        y=np.asarray(background) / scale,
+        mode='lines',
+        name='Background',
+        line=dict(width=line_px, color=BACKGROUND_COLOR),
+        legendrank=999,  # ahead of the default 1000, so it leads the legend
+        showlegend=showlegend,
+        hovertemplate=f'{x_label}: %{{x:.2f}}<br>Background: %{{y:.3g}}<extra></extra>'
+    ), row=row, col=1)
 
 
 def _apply_compact_style(fig, title: Optional[str], margin: dict) -> None:
@@ -172,6 +206,7 @@ def plot_composite(
     y_range: Optional[Tuple[float, float]] = None,
     compact: bool = False,
     normalize: bool = False,
+    background: Optional[np.ndarray] = None,
 ) -> go.Figure:
     """
     Create composite plot with data, fit, components, and (optionally) residuals.
@@ -209,6 +244,11 @@ def plot_composite(
     normalize : bool, default=False
         Divide the spectrum by its own tallest peak, putting that peak at 1.0.
         See `peak_normalization_scale`.
+    background : Optional[np.ndarray], default=None
+        The subtracted baseline, on `x`. Given, the data, fit and components
+        are drawn on top of it (see `_add_spectrum_traces`); the residuals stay
+        about zero. Ignored unless it matches `x` in length, so a stale one
+        falls back to the baseline-corrected view rather than raising.
 
     Returns
     -------
@@ -236,10 +276,12 @@ def plot_composite(
 
     x_label = axis_label(mode)
     scale = peak_normalization_scale(y_data, fit_result) if normalize else 1.0
+    if background is not None and len(background) != len(x):
+        background = None
 
     _add_spectrum_traces(
         fig, 1, x, y_data, fit_result, x_label, show_components, show_legend,
-        marker_px, fit_line_px, component_line_px, scale,
+        marker_px, fit_line_px, component_line_px, scale, background,
     )
 
     if show_residuals and fit_result and fit_result.total_fit_curve is not None:

@@ -68,6 +68,101 @@ class TestParseSpectrum:
         assert len(spectra) == 2
 
 
+class TestHeadersAndFootersAreSkipped:
+    """Exports put column names, acquisition settings or section markers above
+    the numbers. Until v5.11.0 any of them failed the whole file with "Ensure
+    file contains only numeric data with no header row"."""
+
+    X = np.linspace(200, 300, 120)
+    Y = np.linspace(760, 1080, 120)
+
+    def _rows(self, sep="\t"):
+        return [f"{a:.3f}{sep}{b:.1f}" for a, b in zip(self.X, self.Y)]
+
+    def _path(self, tmp_path, lines, encoding="utf-8"):
+        path = tmp_path / "spectrum.txt"
+        path.write_bytes("\n".join(lines).encode(encoding))
+        return str(path)
+
+    def _assert_all_rows(self, data):
+        np.testing.assert_allclose(data.X, self.X, atol=1e-3)
+        np.testing.assert_allclose(data.Y, self.Y, atol=0.05)
+
+    def test_a_row_of_column_names(self, tmp_path):
+        """The digitized TSMC spec file's own header."""
+        path = self._path(tmp_path, ["Raman shift (cm-1)\tIntensity (a.u.)"] + self._rows())
+        self._assert_all_rows(parse_spectrum(path))
+
+    def test_a_block_of_acquisition_settings(self, tmp_path):
+        header = ["#Acq. time (s)=10", "#Accumulations=2", "#Laser (nm)=532.17",
+                  "#Grating=1800 gr/mm", "", "#Wave\t#Intensity"]
+        self._assert_all_rows(parse_spectrum(self._path(tmp_path, header + self._rows())))
+
+    def test_sections_with_blank_lines_and_key_value_numbers(self, tmp_path):
+        """"Points<TAB>120" and a lone "1024" are numbers in the header, but
+        neither is a row of two numbers."""
+        header = ["[Header]", "Title\tmap point 3", "Points\t120", "1024", "",
+                  "[Data]", "Wavenumber [1/cm]\tIntensity [CCD cts]"]
+        self._assert_all_rows(parse_spectrum(self._path(tmp_path, header + self._rows())))
+
+    def test_a_begin_marker_and_a_matching_end_marker(self, tmp_path):
+        header = ["Integration Time (sec): 1.000000E-1", "Number of Pixels: 120",
+                  ">>>>>Begin Spectral Data<<<<<"]
+        footer = [">>>>>End Spectral Data<<<<<", ""]
+        path = self._path(tmp_path, header + self._rows() + footer)
+        self._assert_all_rows(parse_spectrum(path))
+
+    def test_a_comma_delimited_header(self, tmp_path):
+        path = self._path(tmp_path, ["Wavelength (nm),Counts"] + self._rows(","))
+        self._assert_all_rows(parse_spectrum(path))
+
+    def test_semicolon_delimiter(self, tmp_path):
+        path = self._path(tmp_path, ["x;y"] + self._rows(";"))
+        self._assert_all_rows(parse_spectrum(path))
+
+    @pytest.mark.parametrize("encoding", ["cp1252", "utf-16", "utf-8-sig"])
+    def test_non_ascii_header_in_any_common_encoding(self, tmp_path, encoding):
+        """Headers are where "µ" and "°" turn up; cp1252 is what older Windows
+        export tools write, and it isn't valid UTF-8."""
+        header = ["Laser power (µW)\t50", "Stage temp (°C)\t25",
+                  "Raman shift (cm-1)\tIntensity"]
+        path = self._path(tmp_path, header + self._rows(), encoding=encoding)
+        self._assert_all_rows(parse_spectrum(path))
+
+    def test_a_delimiter_at_the_end_of_every_row(self, tmp_path):
+        """Spreadsheet exports often end each line with the delimiter; the
+        empty column it makes is not a spectrum."""
+        rows = [r + "\t" for r in self._rows()]
+        spectra = parse_spectrum_multi(self._path(tmp_path, ["x\ty\t"] + rows))
+        assert len(spectra) == 1
+        self._assert_all_rows(spectra[0])
+
+    def test_a_missing_value_keeps_its_column(self, tmp_path):
+        """An empty cell in a multi-Y row must not slide the next value left
+        into its column, which splitting on whitespace instead would do."""
+        rows = [f"{a:.3f}\t{b:.1f}\t{b + 1:.1f}" for a, b in zip(self.X, self.Y)]
+        rows[5] = f"{self.X[5]:.3f}\t\t{self.Y[5] + 1:.1f}"
+
+        # Column A carries the gap and is rejected; column B is intact.
+        spectra = parse_spectrum_multi(self._path(tmp_path, ["x\tA\tB"] + rows))
+        assert len(spectra) == 1
+        np.testing.assert_allclose(spectra[0].Y, self.Y + 1, atol=0.05)
+
+    def test_multi_y_with_a_header_counts_the_same_as_it_parses(self, tmp_path):
+        rows = [f"{a:.3f}\t{b:.1f}\t{b:.1f}\t{b:.1f}" for a, b in zip(self.X, self.Y)]
+        path = self._path(tmp_path, ["#exported", "x\tp1\tp2\tp3"] + rows)
+
+        assert count_spectra(path) == len(parse_spectrum_multi(path)) == 3
+
+    def test_a_file_with_no_numbers_says_so(self, tmp_path):
+        with pytest.raises(ValueError, match="No rows of numbers"):
+            parse_spectrum(self._path(tmp_path, ["Raman shift\tIntensity", "n/a\tn/a"]))
+
+    def test_an_empty_file_says_so(self, tmp_path):
+        with pytest.raises(ValueError, match="empty"):
+            parse_spectrum(self._path(tmp_path, [""]))
+
+
 class TestValidateSpectrumFile:
     def test_valid_file(self, tmp_path):
         x = np.linspace(0, 100, 120)

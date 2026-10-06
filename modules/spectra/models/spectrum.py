@@ -222,6 +222,12 @@ class SpectrumFile:
         Whether preprocessing changed after fit (requires refitting) (v2.2+).
     last_preprocessing_hash : Optional[str]
         SHA256 hash of (despike + baseline params) for staleness detection (v2.2+).
+    background : Optional[np.ndarray]
+        The baseline subtracted from `processed_data`, on its X, in original
+        scale (v5.13.0). Kept so the fit can be drawn sitting on the background
+        it was separated from: the de-spiked data is `processed_data.Y +
+        background`. None until a baseline is applied, and cleared by anything
+        that replaces `processed_data` with a series it doesn't describe.
     """
 
     filename: str
@@ -243,6 +249,7 @@ class SpectrumFile:
     fit_done: bool = False
     fit_stale: bool = False
     last_preprocessing_hash: Optional[str] = None
+    background: Optional[np.ndarray] = None  # v5.13.0: the subtracted baseline
 
     def __post_init__(self):
         """Validate attributes."""
@@ -295,6 +302,7 @@ class SpectrumFile:
         self.fit_done = False
         self.fit_stale = False
         self.last_preprocessing_hash = None
+        self.background = None
 
     def to_dict(self, include_arrays: bool = True) -> dict:
         """
@@ -328,10 +336,12 @@ class SpectrumFile:
             result["original_data"] = self.original_data.to_dict()  # **NEW (Issue 5)**
             result["raw_data"] = self.raw_data.to_dict()
             result["processed_data"] = self.processed_data.to_dict()
+            result["background"] = self.background.tolist() if self.background is not None else None
         else:
             result["original_data"] = None
             result["raw_data"] = None
             result["processed_data"] = None
+            result["background"] = None
 
         return result
 
@@ -373,5 +383,9 @@ class SpectrumFile:
             baseline_done=data.get("baseline_done", False),
             fit_done=data.get("fit_done", False),
             fit_stale=data.get("fit_stale", False),
-            last_preprocessing_hash=data.get("last_preprocessing_hash", None)
+            last_preprocessing_hash=data.get("last_preprocessing_hash", None),
+            # v5.13.0: projects saved earlier have no background; they plot
+            # baseline-corrected until re-run.
+            background=(np.array(data["background"], dtype=np.float64)
+                        if data.get("background") is not None else None),
         )

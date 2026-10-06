@@ -5,6 +5,7 @@ import pytest
 
 from modules.spectra.models.peak import FitResult, FittedPeak
 from modules.spectra.processing.peak_metrics import (
+    NEAR_ZERO_FRACTION,
     aggregate_fit_results,
     aggregate_raw_peak_stats,
     compute_peak_intensity_ratio,
@@ -97,6 +98,49 @@ class TestAggregateFitResults:
         fits = [_fit_result([_peak("LA", 130.0, intensity=36.0, width_fwhm=22.0, area=1800.0)])]
 
         assert aggregate_fit_results(list(enumerate(fits)))[0].intensity_mean == 36.0
+
+
+class TestNearZeroFloor:
+    """`relative_intensity_floor`: the PL summary table's copy of the PL
+    quality figure's near-zero rule."""
+
+    def _mos2(self):
+        return [
+            (1, _fit_result([_peak("A0", 668.0, 7000.0, 20.0), _peak("A-", 674.0, 3800.0, 36.0)])),
+            # A0 fitted to nothing: 0.01 against A-'s 4300 -- its 645 nm centre
+            # and 45 nm width describe nothing.
+            (2, _fit_result([_peak("A0", 645.0, 0.01, 45.0), _peak("A-", 683.0, 4300.0, 29.0)])),
+            (3, _fit_result([_peak("A0", 665.0, 2100.0, 20.0), _peak("A-", 674.0, 720.0, 37.0)])),
+        ]
+
+    def test_the_constant_is_the_one_the_pl_figure_uses(self):
+        from modules.spectra.viz.peak_quality import PL_CLEANING
+        assert PL_CLEANING.relative_intensity_floor == NEAR_ZERO_FRACTION == 0.02
+
+    def test_off_by_default_so_raman_and_other_callers_are_unchanged(self):
+        stats = {s.label: s for s in aggregate_fit_results(self._mos2())}
+
+        assert stats["A0"].n == 3
+
+    def test_a_near_zero_peak_is_skipped_whole(self):
+        stats = {s.label: s for s in aggregate_fit_results(
+            self._mos2(), relative_intensity_floor=NEAR_ZERO_FRACTION)}
+
+        assert stats["A0"].n == 2
+        assert stats["A0"].center_mean == pytest.approx(666.5)
+        assert stats["A0"].fwhm_mean == pytest.approx(20.0)
+        assert stats["A-"].n == 3
+
+    def test_the_floor_is_relative_to_the_same_fit(self):
+        """A dim spectrum's peaks are judged against that spectrum."""
+        fits = [
+            (1, _fit_result([_peak("X", 750.0, 20000.0, 30.0), _peak("T", 765.0, 5000.0, 45.0)])),
+            (2, _fit_result([_peak("X", 751.0, 300.0, 30.0), _peak("T", 766.0, 100.0, 45.0)])),
+        ]
+        stats = {s.label: s for s in aggregate_fit_results(
+            fits, relative_intensity_floor=NEAR_ZERO_FRACTION)}
+
+        assert stats["X"].n == 2 and stats["T"].n == 2
 
 
 class TestComputePeakIntensityRatio:

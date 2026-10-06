@@ -55,7 +55,7 @@ The full reasoning is in the
   `LA/E2g+A1g` = 0.13, and PL's Exciton/Trion FWHM = 35. They are inherited
   literals from the wafer-comparison scripts, not preset data. **PL has no
   centre spec and no ratio spec** — the ancestor gates its only PL reference
-  line on the FWHM panel, and the preset's 770/800 nm are *fit-initialisation*
+  line on the FWHM panel, and the preset's 755/780 nm are *fit-initialisation*
   guesses. Promoting those to `spec=` would invent a tolerance nobody measured.
 - **FWHM means the Voigt FWHM.** Use `fitting.voigt_fwhm(sigma, gamma)`. Reporting
   `2.355 * sigma` — the Gaussian half, ignoring the Lorentzian — was a real bug

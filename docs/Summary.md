@@ -453,7 +453,8 @@ the page cannot be missed by the fixture.
 - **Baseline-Corrected**: After baseline subtraction
 - **Fit Total**: Sum of all fitted peaks
 - **Peak Components**: Individual peak curves
-- **Residuals**: Baseline-corrected data minus Fit Total
+- **Residuals**: Baseline-corrected data minus Fit Total, in a panel below the spectrum (shared X axis)
+- **Peaks on Background**: Adds the subtracted baseline (gray) back under the data, fit and components; residuals stay about zero. Needs the baseline stored by the auto-workflow (v5.13.0+); Quick Export follows it
 
 ### Baseline Algorithms
 1. **Polynomial**: Fast, good for smooth backgrounds (Raman)

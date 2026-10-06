@@ -24,7 +24,7 @@ data, and there are only four in the whole lineage:
 
 There is deliberately **no PL centre spec and no PL ratio spec**. The ancestor
 gates its only PL reference line on `if col == "FWHM"`, so the centre panels
-never had one, and the 770/800 nm figures in the material preset are fit
+never had one, and the 755/780 nm figures in the material preset are fit
 *initialisation* guesses — promoting those to specs would invent a tolerance
 nobody measured. The unity line the ancestor draws on the PL ratio is grey
 dotted with no legend entry and is never called a spec, unlike every line it
@@ -39,8 +39,9 @@ cut within each position that `peak_metrics.aggregate_fit_results` takes, so
 the figure and the report's summary tables cannot show two different numbers
 for one measurement. PL inherits a different rule — a bad-fit floor plus the
 widest 5% of each peak's fits dropped across the sample — because that is what
-the PL lineage does and its peaks fail differently. Both run downstream of the
-same R-squared gate.
+the PL lineage does and its peaks fail differently. It also drops a peak fitted
+to near zero (under 2% of its spectrum's strongest), whose centre and width are
+then meaningless. Both run downstream of the same R-squared gate.
 
 **The marker statistic differs too.** Raman's ancestor marks each position with
 a mean, PL's with a median, and the PL summary schema stores medians only. The
@@ -62,6 +63,7 @@ from matplotlib import gridspec  # noqa: E402
 
 from ..models.peak import FitResult  # noqa: E402
 from ..processing.peak_metrics import (  # noqa: E402
+    NEAR_ZERO_FRACTION,
     RAMAN_RATIO_PAIRS,
     iqr_mask,
     peak_intensity,
@@ -129,12 +131,19 @@ class CleaningRule:
     ``per_position_iqr`` is the 1.5x Tukey cut taken *within* each grid
     position, matching `peak_metrics.aggregate_fit_results`. It is the whole of
     Raman's rule and none of PL's.
+
+    ``relative_intensity_floor`` drops a peak whose intensity is below that
+    fraction of the strongest peak *in the same spectrum*. A component the fit
+    drove to zero still reports a centre and a width, but they describe nothing
+    -- the parameters are free once the peak has no height -- and plotting them
+    puts noise in the same cloud as real fits.
     """
 
     fwhm_floor: Optional[float] = None
     center_floor: Optional[float] = None
     fwhm_top_fraction: Optional[float] = None
     per_position_iqr: bool = True
+    relative_intensity_floor: Optional[float] = None
 
 
 #: Raman: the same per-position IQR cut the summary tables take, and nothing
@@ -142,16 +151,22 @@ class CleaningRule:
 #: of the same reader.
 RAMAN_CLEANING = CleaningRule(per_position_iqr=True)
 
-#: PL: the inherited rule. `FWHM > 5 nm` and `Center > 700 nm` reject fits that
-#: collapsed onto noise or wandered out of the emission band, then the widest
-#: 5% of each peak's fits are dropped across the whole sample. No per-position
-#: IQR cut: this already removed the tail that cut exists to remove, and taking
-#: both would cut real position-to-position spread.
+#: PL: `FWHM > 5 nm` rejects fits that collapsed onto noise, a peak under 2% of
+#: its own spectrum's strongest is dropped as fitted-to-zero, then the widest 5%
+#: of each peak's fits are dropped across the whole sample. No per-position IQR
+#: cut: this already removed the tail that cut exists to remove, and taking both
+#: would cut real position-to-position spread.
+#:
+#: The inherited `Center > 700 nm` floor is gone (v5.10.6). It was WSe2's
+#: emission band written as a constant, so it discarded every MoS2 peak
+#: (620-680 nm) and left MoS2's figure empty. It never removed a WSe2 fit: the
+#: fitter's own centre bounds, which carry the preset's tolerances, keep every
+#: WSe2 PL peak above 740 nm.
 PL_CLEANING = CleaningRule(
     fwhm_floor=5.0,
-    center_floor=700.0,
     fwhm_top_fraction=0.05,
     per_position_iqr=False,
+    relative_intensity_floor=NEAR_ZERO_FRACTION,
 )
 
 #: How each known Raman ratio is *labelled*: (ylabel, caption, spec). Which
@@ -348,6 +363,18 @@ def _clean(records: Sequence[_PeakRecord], rule: CleaningRule) -> List[_PeakReco
         kept = [r for r in kept if r.fwhm is not None and r.fwhm > rule.fwhm_floor]
     if rule.center_floor is not None:
         kept = [r for r in kept if r.center > rule.center_floor]
+    if rule.relative_intensity_floor is not None:
+        # Measured against the full record set, so a strongest peak that
+        # another floor dropped still sets its spectrum's reference.
+        strongest: Dict[int, float] = {}
+        for record in records:
+            strongest[record.spectrum] = max(
+                strongest.get(record.spectrum, record.intensity), record.intensity
+            )
+        kept = [
+            r for r in kept
+            if r.intensity >= rule.relative_intensity_floor * strongest[r.spectrum]
+        ]
 
     if rule.fwhm_top_fraction:
         # Per label, not pooled: peaks of different widths would otherwise have

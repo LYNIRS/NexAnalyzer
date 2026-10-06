@@ -102,6 +102,7 @@ from modules.spectra.io.preset_store import load_presets
 from modules.spectra.io.results_excel import TechniqueResults, build_sample_results_xlsx
 from modules.spectra.processing.parser import count_spectra
 from modules.spectra.processing.peak_metrics import (
+    NEAR_ZERO_FRACTION,
     R_SQUARED_MIN,
     RAMAN_RATIO_PAIRS,
     aggregate_fit_results,
@@ -809,7 +810,11 @@ if scan is not None:
                         # point of each processed spectrum, no fit involved —
                         # then the fitted peaks. The same "Raw" row the on-screen
                         # table and the master CSV already show.
-                        pl_stats = aggregate_fit_results(pl_pairs) if pl_pairs else []
+                        # The PL quality figure's near-zero rule, so the table's
+                        # n and the figure's points count the same peaks.
+                        pl_stats = aggregate_fit_results(
+                            pl_pairs, relative_intensity_floor=NEAR_ZERO_FRACTION
+                        ) if pl_pairs else []
                         raw_stat = aggregate_raw_peak_stats(
                             [s for _, s in batch_result.pl_spectra]
                         )

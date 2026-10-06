@@ -254,7 +254,8 @@ def render_sidebar():
 
                     # Update view options to show fit results, unless the
                     # user pinned these checkboxes by hand.
-                    set_view_options({'show_fit': True, 'show_components': True})
+                    set_view_options({'show_fit': True, 'show_components': True,
+                                      'show_on_background': True})
 
                     # Auto-expand export section
                     st.session_state['expanded_section'] = 'export'
@@ -368,7 +369,8 @@ def render_sidebar():
                             for fname, err in failed_files:
                                 st.error(f"**{fname}**: {err}")
 
-                    set_view_options({'show_fit': True, 'show_components': True})
+                    set_view_options({'show_fit': True, 'show_components': True,
+                                      'show_on_background': True})
                     st.session_state['expanded_section'] = 'export'
                     st.session_state['despike_preview'] = None
                     st.session_state['baseline_preview'] = None
@@ -418,6 +420,8 @@ def render_sidebar():
                 # plot above it is the bug this fixes.
                 show_components=st.session_state.get("show_components", True),
                 show_residuals=st.session_state.get("show_residuals", True),
+                background=(export_spectrum.background
+                            if st.session_state.get("show_on_background", True) else None),
             )
         except Exception as e:
             st.error(f"Failed to prepare export: {e}")
@@ -830,6 +834,12 @@ print(json.dumps(list(selected_files)))
         st.checkbox("Show Residuals", key="show_residuals",
                    on_change=pin_view_option, args=("show_residuals",),
                    help="Show fit residuals (Baseline-corrected minus Fit Total)")
+
+        st.checkbox("Peaks on Background", key="show_on_background",
+                   on_change=pin_view_option, args=("show_on_background",),
+                   help="Draw the data, fit and components on top of the "
+                        "subtracted baseline (gray), instead of on zero. "
+                        "Residuals stay about zero. Quick Export follows.")
 
         st.caption(
             "Toggle plot layers on/off without reprocessing. A layer you set "

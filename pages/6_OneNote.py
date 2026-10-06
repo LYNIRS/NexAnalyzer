@@ -63,6 +63,9 @@ from modules.spectra.processing.sample_scanner import (
     scan_sample_folder,
 )
 
+#: The Wafer selectbox's widget key; see where it is seeded.
+_WAFER_KEY = "onenote_wafer"
+
 state = get_onenote_state()
 qc_state = get_qc_report_state()
 runcard_state = get_runcard_state()
@@ -136,15 +139,25 @@ if layout is not None:
         # Newest first — the wafer someone wants to publish is nearly always
         # the one just measured.
         options = [""] + wafers
-        # A wafer folder picked by mistake is still a wafer the operator
-        # named, so it seeds the dropdown rather than being discarded.
-        previous = state.get("wafer_id") or picked_wafer
-        index = options.index(previous) if previous in options else 0
+
+        # Keyed and seeded, never `index=`. Unkeyed, the selectbox's identity
+        # includes its index, and the index came from the wafer chosen on the
+        # *previous* run — so picking a second wafer straight after the first
+        # changed the identity, Streamlit discarded the pick as belonging to a
+        # widget that no longer existed, and the dropdown snapped back. The
+        # seed fills only an absent or stale key: on the first visit, on
+        # return from another page (which drops the key), or when a new tool
+        # folder's list no longer holds the old wafer.
+        if st.session_state.get(_WAFER_KEY) not in options:
+            # A wafer folder picked by mistake is still a wafer the operator
+            # named, so it seeds the dropdown rather than being discarded.
+            previous = state.get("wafer_id") or picked_wafer
+            st.session_state[_WAFER_KEY] = previous if previous in options else ""
 
         wafer_id = st.selectbox(
             "Wafer",
             options,
-            index=index,
+            key=_WAFER_KEY,
             format_func=lambda w: w or "Select a wafer…",
             help=f"{len(wafers)} wafers with optical data under {layout.name}.",
         )
@@ -169,11 +182,18 @@ if layout is not None and wafer_id:
         path = wafer_paths.path_for(role)
         # Read-only status, deliberately: whether a file is addressable is
         # something the app knows, not a decision the operator makes.
+        #
+        # Written to the key on every run rather than passed as `value=`. A
+        # keyed checkbox is identified by its key alone, so `value=` is only
+        # the first render's default: the first wafer picked set these ticks
+        # for the whole session, and every later wafer showed its filenames
+        # beside its predecessor's empty boxes.
+        found_key = f"onenote_found_{role}"
+        st.session_state[found_key] = path is not None
         st.checkbox(
             f"{label} — {path.name if path else 'not linked'}",
-            value=path is not None,
             disabled=True,
-            key=f"onenote_found_{role}",
+            key=found_key,
         )
 
     if not wafer_paths.linked(tool_layout.DATALOG):

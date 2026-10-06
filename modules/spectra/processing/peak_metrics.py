@@ -108,6 +108,18 @@ it is.
 IQR_FENCE = 1.5
 """Tukey fence multiplier for the per-point outlier cut. Also inherited."""
 
+NEAR_ZERO_FRACTION = 0.02
+"""A peak under this fraction of the strongest peak in its own fit was fitted to
+zero: it still reports a centre and a width, but with no height those
+parameters are free and describe nothing.
+
+PL only. The QC Report's PL summary table (`aggregate_fit_results`) and its PL
+quality figure (`peak_quality.PL_CLEANING`) both read this one value, so the
+table's `n` and the figure's points cannot disagree. MoS2's A0 is the case that
+needs it: on red-shifted wafers the trion carries the whole peak and A0 fits to
+nothing on a third of the points.
+"""
+
 
 def iqr_mask(values: np.ndarray) -> np.ndarray:
     """
@@ -161,6 +173,7 @@ def _mean_std(pooled: np.ndarray) -> Tuple[float, float]:
 
 def aggregate_fit_results(
     fits_by_point: Sequence[Tuple[int, FitResult]],
+    relative_intensity_floor: Optional[float] = None,
 ) -> List[PeakStat]:
     """
     Group fitted peaks by label across `(point, fit_result)` pairs and compute
@@ -185,13 +198,26 @@ def aggregate_fit_results(
     more than one value survives, else 0.0. Callers should pass only successful
     fits, already gated by `filter_fits_by_quality`; neither `FitResult.success`
     nor R-squared is re-checked here.
+
+    `relative_intensity_floor` (the QC Report passes `NEAR_ZERO_FRACTION` for
+    PL) skips a peak whose intensity is under that fraction of the strongest
+    peak in the same fit. It is skipped whole -- centre, width, intensity and
+    `n` -- so `n` counts the points where the peak was found, and the intensity
+    mean is over those points.
     """
     metrics: dict = {}
     counts: dict = {}
     order: List[str] = []
 
     for point, fit_result in fits_by_point:
+        floor = None
+        if relative_intensity_floor is not None and fit_result.fitted_peaks:
+            floor = relative_intensity_floor * max(
+                peak_intensity(p) for p in fit_result.fitted_peaks
+            )
         for peak in fit_result.fitted_peaks:
+            if floor is not None and peak_intensity(peak) < floor:
+                continue
             label = peak.label
             if label not in metrics:
                 metrics[label] = {"center": {}, "intensity": {}, "fwhm": {}, "fwhm_v1": {}}

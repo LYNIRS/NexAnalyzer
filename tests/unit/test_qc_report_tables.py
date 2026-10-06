@@ -203,6 +203,30 @@ class TestFrameClassStats:
 
     def test_no_frames_yields_no_rows_rather_than_a_table_of_zeros(self):
         assert frame_class_stats([]) == []
+
+    def test_a_frame_without_the_class_does_not_turn_the_contrast_nan(self):
+        """A frame with no above-class pixels records nan; the wafer's figure
+        is taken over the frames that have the class (SU261001 printed
+        "nan ± nan")."""
+        stats = {entry.label: entry for entry in frame_class_stats([
+            _frame(1, (1.0, 99.0, 0.0), contrast_above=float("nan")),
+            _frame(2, (1.0, 98.0, 1.0), contrast_above=4.0),
+            _frame(3, (1.0, 98.0, 1.0), contrast_above=6.0),
+        ])}
+
+        assert stats["Above 2L"].contrast_mean == pytest.approx(5.0)
+        assert stats["Above 2L"].contrast_std == pytest.approx(np.std([4.0, 6.0], ddof=1))
+
+    def test_a_class_absent_from_every_frame_has_no_contrast(self):
+        """Empty, not nan and not 0.0: there is nothing to measure."""
+        stats = {entry.label: entry for entry in frame_class_stats([
+            _frame(1, (1.0, 99.0, 0.0), contrast_above=float("nan")),
+            _frame(2, (1.0, 99.0, 0.0), contrast_above=float("nan")),
+        ])}
+
+        assert stats["Above 2L"].contrast_mean is None
+        assert stats["Above 2L"].contrast_std is None
+        assert stats["Below 2L"].contrast_mean == pytest.approx(-3.2)
         assert frame_class_rows([]) == []
 
     def _points(self, frames):

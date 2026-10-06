@@ -69,8 +69,7 @@ def _wse2_fit(**intensities):
 
 
 def _pl_fit(exciton=200.0, trion=100.0, exciton_fwhm=30.0, trion_fwhm=50.0):
-    """A PL fit at realistic wavelengths — the cleaning rule rejects anything
-    below 700 nm, so a Raman-shaped fixture would come back empty."""
+    """A PL fit at realistic WSe2 wavelengths and widths."""
     return _fit([
         _peak("Exciton", center=770.0, intensity=exciton, width_fwhm=exciton_fwhm),
         _peak("Trion", center=800.0, intensity=trion, width_fwhm=trion_fwhm),
@@ -220,12 +219,18 @@ class TestCleaning:
         assert RAMAN_CLEANING.fwhm_floor is None
         assert RAMAN_CLEANING.center_floor is None
         assert RAMAN_CLEANING.fwhm_top_fraction is None
+        assert RAMAN_CLEANING.relative_intensity_floor is None
 
-    def test_pl_takes_the_inherited_floors_and_top_fraction_instead(self):
+    def test_pl_takes_the_floors_and_top_fraction_instead(self):
         assert PL_CLEANING.fwhm_floor == 5.0
-        assert PL_CLEANING.center_floor == 700.0
+        assert PL_CLEANING.relative_intensity_floor == 0.02
         assert PL_CLEANING.fwhm_top_fraction == 0.05
         assert PL_CLEANING.per_position_iqr is False
+
+    def test_pl_has_no_centre_floor(self):
+        """The inherited 700 nm floor was WSe2's emission band as a constant,
+        and it discarded every MoS2 peak (620-680 nm)."""
+        assert PL_CLEANING.center_floor is None
 
     def test_a_narrow_fit_is_dropped_by_the_floor(self):
         """`FWHM > 5`, strictly — a fit that collapsed onto noise."""
@@ -238,15 +243,53 @@ class TestCleaning:
 
         assert [r.label for r in kept] == ["Trion"]
 
-    def test_a_fit_below_the_emission_band_is_dropped_by_the_centre_floor(self):
+    def test_a_centre_floor_still_works_when_a_rule_sets_one(self):
         records = _records([(1, _fit([
             _peak("Exciton", center=650.0, width_fwhm=30.0),
             _peak("Trion", center=800.0, width_fwhm=50.0),
         ]))])
 
-        kept = _clean(records, PL_CLEANING)
+        kept = _clean(records, CleaningRule(center_floor=700.0))
 
         assert [r.label for r in kept] == ["Trion"]
+
+    def test_mos2_peaks_below_700_nm_reach_the_figure(self):
+        """A0 662, A- 680 and B 620: all three survive PL cleaning."""
+        records = _records([(1, _fit([
+            _peak("A0", center=662.0, intensity=2000.0, width_fwhm=22.0),
+            _peak("A-", center=680.0, intensity=1000.0, width_fwhm=40.0),
+            _peak("B", center=620.0, intensity=100.0, width_fwhm=30.0),
+        ]))])
+
+        kept = _clean(records, PL_CLEANING)
+
+        assert [r.label for r in kept] == ["A0", "A-", "B"]
+
+    def test_a_peak_fitted_to_near_zero_is_dropped(self):
+        """Under 2% of its spectrum's strongest peak, the centre and width
+        describe nothing; the peak that carries the spectrum stays."""
+        records = _records([(1, _fit([
+            _peak("A0", center=645.0, intensity=10.0, width_fwhm=45.0),
+            _peak("A-", center=683.0, intensity=4300.0, width_fwhm=29.0),
+        ]))])
+
+        kept = _clean(records, PL_CLEANING)
+
+        assert [r.label for r in kept] == ["A-"]
+
+    def test_the_intensity_floor_is_per_spectrum_not_pooled(self):
+        """A dim spectrum's peaks are judged against that spectrum, so a weak
+        point is not wiped out by a bright one elsewhere on the wafer."""
+        records = _records([
+            (1, _pl_fit(exciton=20000.0, trion=5000.0)),
+            (2, _pl_fit(exciton=300.0, trion=100.0)),
+        ])
+
+        kept = _clean(records, PL_CLEANING)
+
+        assert sorted((r.point, r.label) for r in kept) == [
+            (1, "Exciton"), (1, "Trion"), (2, "Exciton"), (2, "Trion"),
+        ]
 
     def test_the_top_fraction_is_taken_per_peak_not_pooled(self):
         """Exciton is the narrower peak. Pooling would judge its whole

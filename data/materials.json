@@ -4,11 +4,11 @@
     {
       "material_name": "MoS2",
       "enabled": true,
-      "description": "MoS2 E2g and A1g peaks",
+      "description": "MoS2 Raman / MoS2 PL peaks, tuned on monolayer MoS2 on sapphire (488 nm). Raman fits 2LA(M) because its band sits on A1g's high side; PL fits the A0 exciton, A- trion and B exciton.",
       "raman": {
-        "x_range_enabled": false,
-        "x_min": null,
-        "x_max": null,
+        "x_range_enabled": true,
+        "x_min": 340.0,
+        "x_max": 480.0,
         "despike_threshold": 8.0,
         "baseline_algorithm": "ALS",
         "baseline_degree": null,
@@ -17,23 +17,74 @@
         "peak_templates": [
           {
             "peak_label": "E2g",
-            "center": 383.0,
-            "center_tolerance": 5.0,
-            "width_fwhm": 10.0,
+            "center": 384.0,
+            "center_tolerance": 6.0,
+            "width_fwhm": 6.0,
             "shape": 0.3,
             "color": "#d62728"
           },
           {
             "peak_label": "A1g",
-            "center": 408.0,
-            "center_tolerance": 5.0,
-            "width_fwhm": 12.0,
+            "center": 405.0,
+            "center_tolerance": 6.0,
+            "width_fwhm": 7.0,
             "shape": 0.3,
             "color": "#9467bd"
+          },
+          {
+            "peak_label": "2LA(M)",
+            "center": 455.0,
+            "center_tolerance": 15.0,
+            "width_fwhm": 20.0,
+            "shape": 0.3,
+            "color": "#D5EF2E"
           }
         ],
-        "exclusion_ranges": "375-390; 400-415",
+        "exclusion_ranges": null,
         "max_iterations": 2000
+      },
+      "pl": {
+        "x_range_enabled": true,
+        "x_min": 540.0,
+        "x_max": 800.0,
+        "despike_threshold": 8.0,
+        "baseline_algorithm": "ALS",
+        "baseline_degree": null,
+        "baseline_lambda": 50000.0,
+        "baseline_p": 0.01,
+        "peak_templates": [
+          {
+            "peak_label": "A0",
+            "center": 662.0,
+            "center_tolerance": 20.0,
+            "width_fwhm": 20.0,
+            "shape": 0.3,
+            "color": "#d62728"
+          },
+          {
+            "peak_label": "A-",
+            "center": 680.0,
+            "center_tolerance": 20.0,
+            "width_fwhm": 35.0,
+            "shape": 0.3,
+            "color": "#9467bd"
+          },
+          {
+            "peak_label": "B",
+            "center": 620.0,
+            "center_tolerance": 20.0,
+            "width_fwhm": 35.0,
+            "shape": 0.3,
+            "color": "#2ED5EF"
+          }
+        ],
+        "exclusion_ranges": "590-760",
+        "max_iterations": 2000
+      },
+      "optical": {
+        "1L": {
+          "ff_divisor": 12.0
+        }
       }
     },
     {
@@ -69,13 +120,13 @@
       "description": "WSe2 Raman / WSe2 PL peaks. The optical block carries the -6.0/+4.25 contrast pair, and every wafer is segmented on it -- one ruler, so two wafers' coverage numbers can be compared.",
       "raman": {
         "x_range_enabled": true,
-        "x_min": 200.0,
-        "x_max": 300.0,
+        "x_min": -5.0,
+        "x_max": 500.0,
         "despike_threshold": 100.0,
         "baseline_algorithm": "ALS",
         "baseline_degree": null,
         "baseline_lambda": 50000.0,
-        "baseline_p": 0.02,
+        "baseline_p": 0.005,
         "peak_templates": [
           {
             "peak_label": "E2g+A1g",
@@ -92,6 +143,14 @@
             "width_fwhm": 4.0,
             "shape": 0.3,
             "color": "#D5EF2E"
+          },
+          {
+            "peak_label": "2ZA(M)",
+            "center": 244.2,
+            "center_tolerance": 4.0,
+            "width_fwhm": 2.0,
+            "shape": 0.3,
+            "color": "#FF7F0E"
           },
           {
             "peak_label": "B2g",
@@ -135,7 +194,7 @@
           }
         ],
         "exclusion_ranges": null,
-        "max_iterations": 14000
+        "max_iterations": 10000
       },
       "pl": {
         "x_range_enabled": false,
@@ -149,7 +208,7 @@
         "peak_templates": [
           {
             "peak_label": "Exciton",
-            "center": 770.0,
+            "center": 755.0,
             "center_tolerance": 15.0,
             "width_fwhm": 30.0,
             "shape": 0.3,
@@ -157,9 +216,130 @@
           },
           {
             "peak_label": "Trion",
-            "center": 800.0,
+            "center": 780.0,
             "center_tolerance": 15.0,
-            "width_fwhm": 50.0,
+            "width_fwhm": 40.0,
+            "shape": 0.3,
+            "color": "#9467bd"
+          }
+        ],
+        "exclusion_ranges": "650-880",
+        "max_iterations": 2000
+      },
+      "optical": {
+        "2L": {
+          "nsigma": 4.0,
+          "minpx": 3,
+          "abs_threshold_below": 6.0,
+          "abs_threshold_above": 4.25
+        }
+      }
+    },
+    {
+      "material_name": "WSe2_truncate",
+      "enabled": true,
+      "description": "Copy of WSe2 with the Raman window truncated to 200-300 cm\u207b\u00b9 (E2g+A1g / 2LA / 2ZA(M) region only).",
+      "raman": {
+        "x_range_enabled": true,
+        "x_min": 200.0,
+        "x_max": 300.0,
+        "despike_threshold": 100.0,
+        "baseline_algorithm": "ALS",
+        "baseline_degree": null,
+        "baseline_lambda": 50000.0,
+        "baseline_p": 0.005,
+        "peak_templates": [
+          {
+            "peak_label": "E2g+A1g",
+            "center": 250.0,
+            "center_tolerance": 7.0,
+            "width_fwhm": 4.0,
+            "shape": 0.3,
+            "color": "#EF482E"
+          },
+          {
+            "peak_label": "2LA",
+            "center": 260.0,
+            "center_tolerance": 7.0,
+            "width_fwhm": 4.0,
+            "shape": 0.3,
+            "color": "#D5EF2E"
+          },
+          {
+            "peak_label": "2ZA(M)",
+            "center": 244.2,
+            "center_tolerance": 4.0,
+            "width_fwhm": 2.0,
+            "shape": 0.3,
+            "color": "#FF7F0E"
+          },
+          {
+            "peak_label": "B2g",
+            "center": 310.0,
+            "center_tolerance": 10.0,
+            "width_fwhm": 2.0,
+            "shape": 0.3,
+            "color": "#2ED5EF"
+          },
+          {
+            "peak_label": "LB",
+            "center": 30.0,
+            "center_tolerance": 5.0,
+            "width_fwhm": 2.0,
+            "shape": 0.3,
+            "color": "#482EEF"
+          },
+          {
+            "peak_label": "LA",
+            "center": 135.0,
+            "center_tolerance": 10.0,
+            "width_fwhm": 15.0,
+            "shape": 0.3,
+            "color": "#76EC32"
+          },
+          {
+            "peak_label": "C",
+            "center": 17.0,
+            "center_tolerance": 5.0,
+            "width_fwhm": 5.0,
+            "shape": 0.3,
+            "color": "#3276EC"
+          },
+          {
+            "peak_label": "center",
+            "center": 0.0,
+            "center_tolerance": 3.0,
+            "width_fwhm": 5.0,
+            "shape": 0.3,
+            "color": "#3276EC"
+          }
+        ],
+        "exclusion_ranges": null,
+        "max_iterations": 10000
+      },
+      "pl": {
+        "x_range_enabled": false,
+        "x_min": null,
+        "x_max": null,
+        "despike_threshold": 8.0,
+        "baseline_algorithm": "ALS",
+        "baseline_degree": null,
+        "baseline_lambda": 50000.0,
+        "baseline_p": 0.01,
+        "peak_templates": [
+          {
+            "peak_label": "Exciton",
+            "center": 755.0,
+            "center_tolerance": 15.0,
+            "width_fwhm": 30.0,
+            "shape": 0.3,
+            "color": "#d62728"
+          },
+          {
+            "peak_label": "Trion",
+            "center": 780.0,
+            "center_tolerance": 15.0,
+            "width_fwhm": 40.0,
             "shape": 0.3,
             "color": "#9467bd"
           }
@@ -191,13 +371,13 @@
       "description": "WSe2 with the monolayer multi-phonon peaks of De Luca et al., arXiv:1910.12503, Table 1 (experimental frequencies, column 1): the 208-270 cm-1 bands, plus the broad LA band split into LA (130.5, the *LA(M) zone-edge mode) and LO2(K)-ZA(K) (137.4). E2g+A1g and 2LA are WSe2's own. LA/E2g+A1g here uses the narrow 130.5 peak, so it is not comparable to WSe2's ratio. Optical block as WSe2.",
       "raman": {
         "x_range_enabled": true,
-        "x_min": 6.0,
-        "x_max": 400.0,
+        "x_min": 200.0,
+        "x_max": 300.0,
         "despike_threshold": 100.0,
         "baseline_algorithm": "ALS",
         "baseline_degree": null,
         "baseline_lambda": 50000.0,
-        "baseline_p": 0.02,
+        "baseline_p": 0.005,
         "peak_templates": [
           {
             "peak_label": "E2g+A1g",
@@ -361,7 +541,7 @@
           }
         ],
         "exclusion_ranges": null,
-        "max_iterations": 2000
+        "max_iterations": 10000
       },
       "pl": {
         "x_range_enabled": false,
@@ -405,7 +585,7 @@
     {
       "material_name": "WSe2 extended V2",
       "enabled": true,
-      "description": "WSe2 extended at the theoretical frequencies of De Luca et al., arXiv:1910.12503, Table 1 (column 2, 0 K DFT; first assignment's value where a row lists two), with the 1L first-order mode split into E2g (E', 250.8) and A1g (A'1, 251.3). Added peaks: +/-4 tolerance, 4 FWHM; E2g/A1g +/-1.5. C, LB, center, 2LA and B2g are WSe2's own. No E2g+A1g peak, so the QC Report's WSe2 metrics are blank for this preset.",
+      "description": "WSe2 with the monolayer multi-phonon peaks of De Luca et al., arXiv:1910.12503, Table 1, at the measured frequencies (column 1), and the first-order mode split into E2g (249.65) and A1g (250.15): the calculated 0.5 cm-1 E'/A'1 splitting, centred on the measured 249.9. For checking the split fit, not for QC reports: there is no E2g+A1g peak, so LA/E2g+A1g and the E2g+A1g panels are blank. LA is the broad ~125 cm-1 band (FWHM 20, +/-10); C starts at FWHM 8. Tuned on TSMC_May TSM260500.",
       "raman": {
         "x_range_enabled": true,
         "x_min": 6.0,
@@ -428,7 +608,7 @@
             "peak_label": "C",
             "center": 17.0,
             "center_tolerance": 5.0,
-            "width_fwhm": 5.0,
+            "width_fwhm": 8.0,
             "shape": 0.3,
             "color": "#3276EC"
           },
@@ -442,23 +622,23 @@
           },
           {
             "peak_label": "LA",
-            "center": 130.1,
-            "center_tolerance": 4.0,
-            "width_fwhm": 4.0,
+            "center": 130.5,
+            "center_tolerance": 10.0,
+            "width_fwhm": 20.0,
             "shape": 0.3,
             "color": "#76EC32"
           },
           {
             "peak_label": "LO2(K)-ZA(K)",
-            "center": 135.2,
-            "center_tolerance": 4.0,
-            "width_fwhm": 4.0,
+            "center": 137.4,
+            "center_tolerance": 6.0,
+            "width_fwhm": 8.0,
             "shape": 0.3,
             "color": "#2E8B57"
           },
           {
             "peak_label": "TO1(K)",
-            "center": 209.6,
+            "center": 208.1,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -466,7 +646,7 @@
           },
           {
             "peak_label": "TA(M)+ZA(M)",
-            "center": 220.4,
+            "center": 219.2,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -474,7 +654,7 @@
           },
           {
             "peak_label": "TA(K)+ZA(K)",
-            "center": 223.6,
+            "center": 224.4,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -482,7 +662,7 @@
           },
           {
             "peak_label": "TA(M)+LA(M)",
-            "center": 228.5,
+            "center": 231.2,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -490,7 +670,7 @@
           },
           {
             "peak_label": "TA(K)+LA(K)",
-            "center": 242.3,
+            "center": 239.9,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -498,7 +678,7 @@
           },
           {
             "peak_label": "2ZA(M)",
-            "center": 244.0,
+            "center": 244.2,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -506,23 +686,23 @@
           },
           {
             "peak_label": "E2g",
-            "center": 250.8,
-            "center_tolerance": 1.5,
+            "center": 249.65,
+            "center_tolerance": 2.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
             "color": "#EF482E"
           },
           {
             "peak_label": "A1g",
-            "center": 251.3,
-            "center_tolerance": 1.5,
+            "center": 250.15,
+            "center_tolerance": 2.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
             "color": "#B22222"
           },
           {
             "peak_label": "ZO1(K)",
-            "center": 257.3,
+            "center": 258.2,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -538,7 +718,7 @@
           },
           {
             "peak_label": "ZO2(K)",
-            "center": 261.9,
+            "center": 262.3,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -554,7 +734,7 @@
           },
           {
             "peak_label": "ZA(K)+LA(K)",
-            "center": 266.1,
+            "center": 266.6,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -562,7 +742,7 @@
           },
           {
             "peak_label": "ZO2(M)",
-            "center": 270.0,
+            "center": 270.1,
             "center_tolerance": 4.0,
             "width_fwhm": 4.0,
             "shape": 0.3,
@@ -578,7 +758,7 @@
           }
         ],
         "exclusion_ranges": null,
-        "max_iterations": 2000
+        "max_iterations": 5000
       },
       "pl": {
         "x_range_enabled": false,

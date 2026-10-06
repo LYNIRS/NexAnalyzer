@@ -3,52 +3,148 @@ Parser for two-column .txt spectrum files.
 
 This module provides functions to:
 - Parse two-column .txt files (X, Y) with auto-delimiter detection
+- Skip any header above the numbers and any footer below them
 - Validate loaded data
 - Convert to SpectrumData objects
+
+Headers
+-------
+Instruments and export tools put different things above the data: a single
+row of column names ("Raman shift (cm-1)<TAB>Intensity (a.u.)"), a block of
+"#key=value" acquisition settings, "[Header]"/"[Data]" sections, or a
+">>>>>Begin Spectral Data<<<<<" marker with a matching end marker below. Rather
+than recognise each format, the parser looks for where the numbers start: the
+first row of two or more numbers that the next few non-blank rows confirm.
+Everything above it is header and everything after the last numeric row is
+footer. A file with no header parses exactly as it did before.
+
+A header line made only of numbers can't be told apart from data this way: a
+lone "1024" is skipped (one number is not a row), but "532<TAB>600" directly
+above the data would be read as its first point.
 """
+
+import io
+from itertools import islice
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Tuple, Optional, Literal, List
+from typing import Tuple, Optional, Literal, List, NamedTuple
 from ..models.spectrum import SpectrumData
+
+
+# Tried in this order on each candidate row; None means any run of whitespace.
+# Tab first because it is the most common in instrument exports, and comma
+# before whitespace so "1, 2" is read as two fields rather than "1," and "2".
+_DELIMITERS: Tuple[Optional[str], ...] = ('\t', ',', ';', None)
+
+# How many non-blank rows after a candidate first row must also be numeric
+# before it is believed. Enough that a stray numeric line in a header doesn't
+# start the data; few enough that a three-row test file still parses.
+_CONFIRM_ROWS = 4
+
+
+class _SpectrumText(NamedTuple):
+    data: str           # the numeric rows only, newline-joined
+    sep: Optional[str]  # delimiter of the numeric rows; None = whitespace
+
+
+def _decode(raw: bytes) -> str:
+    """Bytes to text: UTF-8 (with or without BOM), UTF-16 by its BOM, else cp1252.
+
+    Instrument headers are where non-ASCII turns up ("µm", "°C", "cm⁻¹"), and
+    exports from older Windows software are cp1252, not UTF-8. latin-1 is the
+    last resort because it decodes any byte at all.
+    """
+    if raw.startswith((b'\xff\xfe', b'\xfe\xff')):
+        return raw.decode('utf-16')
+    for encoding in ('utf-8-sig', 'cp1252'):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode('latin-1')
+
+
+def _is_numeric_row(line: str, sep: Optional[str]) -> bool:
+    """Whether `line` is a row of numbers when split on `sep`.
+
+    Trailing empty fields (a delimiter at the end of the line) are ignored. An
+    empty field in the middle is a missing value, as pandas reads it, and
+    doesn't disqualify the row -- but the first field (X) must be a number and
+    at least two fields must be.
+    """
+    fields = [f.strip() for f in (line.split() if sep is None else line.split(sep))]
+    while fields and not fields[-1]:
+        fields.pop()
+    numbers = 0
+    for i, field in enumerate(fields):
+        if not field and i > 0:
+            continue
+        try:
+            float(field)
+        except ValueError:
+            return False
+        numbers += 1
+    return numbers >= 2
+
+
+def _split_header(text: str) -> _SpectrumText:
+    """Separate the numeric rows from any header above and footer below them."""
+    lines = text.splitlines()
+
+    for start, line in enumerate(lines):
+        seps = [s for s in _DELIMITERS if _is_numeric_row(line, s)]
+        if not seps:
+            continue
+        sep = seps[0]
+        following = islice((ln for ln in islice(lines, start + 1, None) if ln.strip()),
+                           _CONFIRM_ROWS)
+        if all(_is_numeric_row(ln, sep) for ln in following):
+            break
+    else:
+        raise ValueError(
+            "No rows of numbers found. Expected X<delimiter>Y[<delimiter>Y...] "
+            "rows, delimited by tab, comma, semicolon or whitespace."
+        )
+
+    end = len(lines) - 1
+    while not _is_numeric_row(lines[end], sep):
+        end -= 1
+
+    return _SpectrumText(data="\n".join(lines[start:end + 1]), sep=sep)
 
 
 def _read_spectrum_dataframe(filepath: str, nrows: Optional[int] = None) -> pd.DataFrame:
     """
-    Read a spectrum .txt file into a DataFrame, sniffing the delimiter.
+    Read a spectrum .txt file into a DataFrame, skipping any header and footer.
 
-    Tries tab first (most common for scientific data), then comma, then
-    falls back to whitespace-delimited. Returns a numeric DataFrame.
+    The delimiter is the first of tab, comma, semicolon and whitespace that
+    makes the first data row numeric. Columns that are empty in every row --
+    left by a delimiter at the end of each line, or a doubled one -- are
+    dropped. Returns a DataFrame of at least 2 columns.
 
     `nrows` limits how much is read, for callers that only need the shape.
     """
-    # Checked explicitly (rather than left to pd.read_csv) so a missing file
-    # surfaces as FileNotFoundError instead of being swallowed by the
-    # per-delimiter except-and-continue loop below.
+    # Checked explicitly so a missing file surfaces as FileNotFoundError
+    # rather than as a parse failure.
     if not Path(filepath).exists():
         raise FileNotFoundError(f"File not found: {filepath}")
 
-    # Try tab; if it produces a single column, fall through to other delimiters
-    df = None
-    for sep, kwargs in [
-        ('\t', {}),
-        (',', {}),
-        (r'\s+', {}),  # whitespace fallback covers files with leading spaces
-    ]:
-        try:
-            candidate = pd.read_csv(filepath, sep=sep, header=None, engine='python',
-                                    nrows=nrows, **kwargs)
-        except Exception:
-            continue
-        if candidate.shape[1] >= 2:
-            df = candidate
-            break
+    raw = Path(filepath).read_bytes()
+    if not raw.strip():
+        raise pd.errors.EmptyDataError("No data in file")
 
-    if df is None or df.shape[1] < 2:
+    text = _split_header(_decode(raw))
+    df = pd.read_csv(io.StringIO(text.data),
+                     sep=r'\s+' if text.sep is None else text.sep,
+                     header=None, engine='python', nrows=nrows)
+    df = df.dropna(axis=1, how='all')
+
+    if df.shape[1] < 2:
         raise ValueError(
             "File must have at least 2 columns (X plus 1+ Y columns). "
-            "Expected delimiter: tab, comma, or whitespace."
+            "Expected delimiter: tab, comma, semicolon or whitespace."
         )
 
     return df
@@ -95,8 +191,7 @@ def parse_spectrum_multi(filepath: str) -> List[SpectrumData]:
         raise ValueError(f"File is empty: {filepath}")
     except Exception as e:
         raise ValueError(
-            f"Failed to parse spectrum file '{filepath}': {e}. "
-            f"Ensure file is X<delimiter>Y[<delimiter>Y...] with no header."
+            f"Failed to parse spectrum file '{filepath}': {e}"
         )
 
     try:
@@ -104,7 +199,7 @@ def parse_spectrum_multi(filepath: str) -> List[SpectrumData]:
     except ValueError as e:
         raise ValueError(
             f"Failed to convert X column to numeric values: {e}. "
-            f"Ensure file contains only numeric data with no header row."
+            f"A non-numeric line inside the data block is not skipped as a header."
         )
 
     spectra: List[SpectrumData] = []
@@ -149,8 +244,8 @@ def parse_spectrum(filepath: str) -> SpectrumData:
     -----
     File format requirements (FR-001 to FR-004):
     - Two columns: X (wavenumber or wavelength), Y (intensity)
-    - Delimiter: Tab or comma (auto-detected)
-    - No header row
+    - Delimiter: tab, comma, semicolon or whitespace (auto-detected)
+    - Any header above the data and footer below it is skipped (see module docstring)
     - Numeric values only
     - Y values must be non-negative
 
