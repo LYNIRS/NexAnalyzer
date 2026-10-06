@@ -20,6 +20,7 @@ from core.io.export import (
     export_figure_html,
     create_filename,
     prompt_save_path,
+    prompt_save_folder,
 )
 from ..io.results_csv import export_fit_params_csv, export_master_csv
 from ..io.preset_store import load_presets
@@ -519,6 +520,92 @@ def render_sidebar():
 
             except Exception as e:
                 st.error(f"Failed to generate master CSV: {e}")
+
+            # Own try/except, independent of the master-CSV one above: a
+            # broken kaleido install must not also take down the CSV export,
+            # and vice versa. Also computes its own default_dir rather than
+            # reusing the master-CSV block's -- that block may have raised
+            # before ever assigning it.
+            try:
+                import os  # local, like this function's other os.path uses
+
+                img_default_dir = getattr(export_spectrum, 'source_dir', None) \
+                    or st.session_state.get('last_picked_dir', '')
+                img_col1, img_col2 = st.columns([2, 1])
+
+                with img_col1:
+                    save_images_clicked = st.button(
+                        "📷 Save PNGs to folder",
+                        help="Open a folder dialog (pre-pointed at your raw-data "
+                             "folder) and save one fit-results PNG per fitted file",
+                        width="stretch"
+                    )
+
+                with img_col2:
+                    st.metric("Files", len(fitted_files))
+
+                if save_images_clicked:
+                    image_dir = prompt_save_folder(
+                        default_dir=img_default_dir,
+                        title="Select Folder for Batch PNG Export",
+                    )
+                    if image_dir:
+                        progress = st.progress(0.0, text="Exporting images…")
+                        saved = 0
+                        failed = []
+                        for i, spectrum in enumerate(fitted_files, start=1):
+                            try:
+                                fig = plot_composite(
+                                    x=spectrum.processed_data.X,
+                                    y_data=spectrum.processed_data.Y,
+                                    fit_result=spectrum.fit_result,
+                                    mode=spectrum.mode,
+                                    title=f"{spectrum.filename} - Fit Results",
+                                    # Same View Options as Quick Export's single
+                                    # PNG, so a batch export matches what the
+                                    # operator is currently looking at.
+                                    show_components=st.session_state.get(
+                                        "show_components", True
+                                    ),
+                                    show_residuals=st.session_state.get(
+                                        "show_residuals", True
+                                    ),
+                                )
+                                png_bytes = export_figure_png(
+                                    fig, width=1200, height=600, scale=2.0
+                                )
+                                out_path = os.path.join(
+                                    image_dir,
+                                    create_filename(spectrum.filename, "fit", "png"),
+                                )
+                                with open(out_path, "wb") as out_f:
+                                    out_f.write(png_bytes)
+                                saved += 1
+                            except RuntimeError:
+                                # kaleido missing -- every remaining export
+                                # would fail identically, so stop rather than
+                                # repeat the same error N times.
+                                st.error("❌ PNG export requires kaleido")
+                                st.caption("Install: `pip install kaleido`")
+                                failed = None
+                                break
+                            except Exception as e:
+                                failed.append((spectrum.filename, str(e)))
+                            progress.progress(
+                                i / len(fitted_files),
+                                text=f"Exporting images… ({i}/{len(fitted_files)})",
+                            )
+                        progress.empty()
+                        if saved:
+                            st.success(f"✅ Saved {saved} PNG(s) to {image_dir}")
+                        if failed:
+                            with st.expander(f"⚠️ {len(failed)} file(s) failed"):
+                                for name, err in failed:
+                                    st.caption(f"{name}: {err}")
+                    # image_dir is None => user cancelled => no-op
+
+            except Exception as e:
+                st.error(f"Failed to prepare batch image export: {e}")
 
         elif len(fitted_files) == 1:
             st.caption("Run Auto-Workflow on multiple files to enable batch export")

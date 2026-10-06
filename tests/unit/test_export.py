@@ -1,8 +1,10 @@
 """Unit tests for core.io.export (figure rasterization and output filenames).
 
-prompt_save_path() is excluded: it spawns a real tkinter subprocess dialog
-and is not practically unit-testable. Fit-results CSVs are covered by
-test_results_csv.py.
+prompt_save_path()/prompt_save_folder() are excluded: both spawn a real
+tkinter subprocess dialog and are not practically unit-testable -- the batch
+image export button that uses prompt_save_folder() is covered through
+AppTest instead, in tests/integration/test_sidebar_batch_export_flow.py.
+Fit-results CSVs are covered by test_results_csv.py.
 """
 
 import plotly.graph_objects as go
