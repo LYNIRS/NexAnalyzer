@@ -45,11 +45,17 @@ images yet:
    table's own (floor-free) component count.
 4. Watershed-grow each marker through the target mask, splitting touching
    flakes at the ridge between two markers.
-5. Drop domains touching the valid region's border (their true size is cut
-   off, unknown) and domains smaller than `MIN_DOMAIN_PX` (oversplit noise,
-   not real flakes).
+5. Drop domains smaller than `MIN_DOMAIN_PX` (oversplit noise, not real
+   flakes), then set aside domains touching the valid region's border: their
+   true size is cut off, so they are not sized, but they are real flakes and
+   count `EDGE_WEIGHT` (one half) each toward nucleation density. A flake
+   straddling the border is shared with the neighbouring field, so counting
+   it whole would overcount and dropping it undercounts; one half is the
+   unbiased weight in expectation. Applied to both frame types alike.
 6. Measure equivalent circular diameter = 2*sqrt(area/pi), in pixels always,
-   and in micrometres when a calibration is supplied.
+   and in micrometres when a calibration is supplied. Pixels here are
+   `contrast.load()`'s working pixels; the calibration is per native camera
+   pixel and is rescaled by `FrameResult.scale` first.
 7. Optionally split those diameters into a small and a large size population
    -- `split_size_populations()`, a KDE valley on `log10(diameter)` gated on
    a minimum ratio (`MIN_POPULATION_RATIO`), so it only fires on a genuine
@@ -124,6 +130,11 @@ POPULATION_KDE_BANDWIDTH = 0.25
 #: populations -- `split_size_populations` returns "no split" rather than
 #: fit a density to a handful of points.
 MIN_DOMAINS_FOR_SPLIT = 20
+
+#: What a domain touching the valid region's border counts for in nucleation
+#: density -- see step 5 of the module docstring. Edge domains are never
+#: sized, so this weight never reaches a diameter statistic.
+EDGE_WEIGHT = 0.5
 
 #: Nucleation density is reported per this many um2 -- (100 um)^2 -- rather
 #: than per um2 directly: a flake count over one um2 is a fraction far
@@ -219,6 +230,11 @@ class DomainResult:
     renderer colour and caption the two populations separately without
     re-deriving the split itself.
 
+    `n_edge` counts domains touching the valid region's border (above
+    `MIN_DOMAIN_PX`), and `edge_mask` marks their pixels. They are left out
+    of `n`, `diameters_*` and `label_mask` -- their size is cut off -- and
+    count `EDGE_WEIGHT` each toward density; see `n_counted`.
+
     `area_um2` is the frame's own analyzed (`valid`) region's real area --
     `valid.sum() * um_per_px**2` -- for nucleation density (count / area).
     `None`, not a pixel-count figure, when `um_per_px` was not supplied: a
@@ -236,6 +252,14 @@ class DomainResult:
     target: str = "above"
     population_is_large: Optional[np.ndarray] = None
     area_um2: Optional[float] = None
+    n_edge: int = 0
+    edge_mask: Optional[np.ndarray] = None
+
+    @property
+    def n_counted(self) -> float:
+        """Flakes counted toward nucleation density: every sized domain,
+        plus `EDGE_WEIGHT` per edge domain."""
+        return self.n + EDGE_WEIGHT * self.n_edge
 
 
 def measure_domains(
@@ -285,8 +309,14 @@ def measure_domains(
     markers (and so several domains) instead of staying one; the module
     default stays put for anyone who hasn't tuned it.
 
-    `um_per_px` is the calibration for the frame's magnification; None means
-    uncalibrated, and `DomainResult.calibrated` is False.
+    `um_per_px` is the calibration for the frame's magnification, in microns
+    per *native camera* pixel -- what `data/om_calibration.json` stores; None
+    means uncalibrated, and `DomainResult.calibrated` is False. Measurement
+    runs on `frame.original`, which `contrast.load()` has already shrunk to
+    `MAXDIM`, so it is converted here by `frame.scale` before any pixel count
+    becomes a length or an area. Applying it to working pixels unconverted
+    under-reported every diameter by 1/scale (1.6x on a 2240-px frame) and
+    over-reported density by its square.
 
     `mask_closing_radius` overrides `DEFAULT_MASK_CLOSING_RADIUS`; None or 0
     keeps the mask exactly as `classify()` produced it. Raise it when a
@@ -329,6 +359,10 @@ def measure_domains(
         # `classify()` already guarantees for the unclosed mask -- the
         # border-touching-domain exclusion below depends on it.
         mask = ndi.binary_closing(mask, iterations=closing_radius) & valid
+
+    # Microns per pixel of `frame.original`, not per camera pixel -- see above.
+    if um_per_px is not None:
+        um_per_px = um_per_px / frame.scale
 
     if not mask.any():
         empty = np.zeros(0, dtype=float)
@@ -412,19 +446,22 @@ def measure_domains(
     # the *inner edge* of `valid`: the one-pixel ring just inside the
     # excluded margin, where a domain that continues past the frame's
     # analysed area meets it.
-    border_ring = valid & ~ndi.binary_erosion(valid)
-    touching_ids = np.unique(labelled[border_ring])
-    touching_ids = touching_ids[touching_ids > 0]
-    cleared = np.where(np.isin(labelled, touching_ids), 0, labelled)
-
-    ids = np.unique(cleared)
+    # Such a domain is still a real flake, though: it is kept aside as an
+    # edge domain, unsized but counted `EDGE_WEIGHT` toward density. The
+    # `min_domain_px` noise floor runs first, so an edge fragment too small
+    # to be a flake anywhere else is not counted at the edge either.
+    ids = np.unique(labelled)
     ids = ids[ids > 0]
     if ids.size:
-        sizes = ndi.sum(np.ones_like(cleared), cleared, index=ids)
+        sizes = ndi.sum(np.ones_like(labelled), labelled, index=ids)
         keep_ids = ids[sizes >= min_domain_px]
     else:
         keep_ids = ids
-    final = np.where(np.isin(cleared, keep_ids), cleared, 0)
+    border_ring = valid & ~ndi.binary_erosion(valid)
+    touching_ids = np.unique(labelled[border_ring])
+    touching_ids = touching_ids[np.isin(touching_ids, keep_ids)]
+    edge_mask = np.isin(labelled, touching_ids)
+    final = np.where(np.isin(labelled, keep_ids) & ~edge_mask, labelled, 0)
 
     kept = np.unique(final)
     kept = kept[kept > 0]
@@ -443,7 +480,7 @@ def measure_domains(
         point=frame.point, n=int(kept.size), diameters_px=diameters_px,
         diameters_um=diameters_um, calibrated=um_per_px is not None,
         label_mask=final, target=target, population_is_large=population_is_large,
-        area_um2=area_um2,
+        area_um2=area_um2, n_edge=int(touching_ids.size), edge_mask=edge_mask,
     )
 
 
@@ -476,6 +513,7 @@ def domain_size_stat(
     n_total = sum(r.n for r in results)
     if n_total == 0:
         return None
+    n_edge = sum(r.n_edge for r in results)
 
     calibrated = any(r.calibrated and r.n for r in results)
     pooled = pooled_diameters(results, calibrated=calibrated)
@@ -485,7 +523,8 @@ def domain_size_stat(
     area_um2 = (
         sum(r.area_um2 for r in results if r.area_um2 is not None) if calibrated else None
     )
-    density_per_100um2 = n_total / area_um2 * DENSITY_AREA_UM2 if area_um2 else None
+    n_counted = n_total + EDGE_WEIGHT * n_edge
+    density_per_100um2 = n_counted / area_um2 * DENSITY_AREA_UM2 if area_um2 else None
 
     return DomainSizeStat(
         n_domains=n_total,
@@ -500,6 +539,7 @@ def domain_size_stat(
         ),
         area_um2=area_um2,
         density_per_100um2=density_per_100um2,
+        n_edge=n_edge,
     )
 
 
@@ -515,7 +555,10 @@ def _pooled_population_stat(
 
     `area_um2` is the same pooled analyzed area `domain_size_stat` computed --
     shared by both populations, since it describes the sample, not either
-    population's own footprint.
+    population's own footprint. Each population's density counts its own
+    sized domains only: an edge domain has no size, so it belongs to neither
+    population, and the two densities sum to less than the pooled one by
+    exactly the edge domains' `EDGE_WEIGHT` share.
     """
     is_large = split_size_populations(pooled)
     if is_large is None:

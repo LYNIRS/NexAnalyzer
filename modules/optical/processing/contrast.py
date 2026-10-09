@@ -98,12 +98,20 @@ def class_labels(ref_label: str, low_coverage: bool = False) -> Tuple[str, str, 
 
 
 # ---------------------------------------------------------------- steps
-def load(path) -> np.ndarray:
+def load_scaled(path) -> Tuple[np.ndarray, float]:
+    """`load()`, plus the factor it resized by: working pixels per native
+    (camera) pixel, 1.0 when the frame already fits `MAXDIM`. Anything that
+    turns a working-resolution pixel count into a physical length needs it,
+    since the micron-per-pixel calibration describes the camera's own pixels."""
     im = Image.open(path).convert("RGB")
     w, h = im.size
     sc = min(1.0, MAXDIM / max(w, h))
     im = im.resize((round(w * sc), round(h * sc)), Image.Resampling.LANCZOS)
-    return np.asarray(im).astype(float)
+    return np.asarray(im).astype(float), sc
+
+
+def load(path) -> np.ndarray:
+    return load_scaled(path)[0]
 
 
 def luminance(a: np.ndarray) -> np.ndarray:
@@ -315,9 +323,11 @@ def analyse(path, ref_label: str, nsigma: float = DEFAULT_NSIGMA,
     """Segment one frame from disk. Returns the raw working dict; see
     `analyse_frame`. `load()` then `analyse_array()` -- see that function for
     why a caller with an in-memory array should call it directly instead."""
-    a = load(path)
-    return analyse_array(a, ref_label, nsigma=nsigma, minpx=minpx, margin=margin,
-                         ff_divisor=ff_divisor, abs_threshold=abs_threshold)
+    a, scale = load_scaled(path)
+    res = analyse_array(a, ref_label, nsigma=nsigma, minpx=minpx, margin=margin,
+                        ff_divisor=ff_divisor, abs_threshold=abs_threshold)
+    res["scale"] = scale
+    return res
 
 
 # ---------------------------------------------------------------- app surface
@@ -347,6 +357,10 @@ class FrameResult:
     threshold_low: float
     threshold_high: float
     shoulder: bool
+    #: Working pixels per native camera pixel -- what `load()` resized by to
+    #: fit `MAXDIM` (0.625 for a 2240-px frame). Divide a native-pixel
+    #: calibration by it to get microns per pixel of `original`.
+    scale: float = 1.0
 
     @property
     def reference_pct(self) -> float:
@@ -404,6 +418,7 @@ def analyse_frame(path, point: int, ref_label: str, name: Optional[str] = None,
         threshold_low=st["th_lo"],
         threshold_high=st["th_hi"],
         shoulder=st["shoulder"],
+        scale=res["scale"],
     )
 
 

@@ -5,7 +5,7 @@ All notable changes to NexAnalyzer will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Local additions (on top of 5.13.0)
+## Local additions (on top of 5.13.0; app version 5.13.0+local.1)
 
 Installation-specific changes carried on top of upstream. They were first
 numbered 5.3.1-5.6.1 on a v5.3.0 checkout, which collides with upstream's own
@@ -15,6 +15,87 @@ threshold: domain size and nucleation density now segment on the preset's
 fixed pair, like every other OM figure. Re-merged onto 5.13.0 on 2026-10-06;
 the WSe2 Raman range and iteration budget follow upstream (-5-500 cm-1, 10000),
 with 200-300 cm-1 now upstream's own WSe2_truncate preset.
+
+From Local 5.6.3 on, `core/version.py` reports these as `5.13.0+local.N`:
+the upstream release they sit on, plus a build tag that can never collide
+with a future upstream number. Local 5.6.3-5.6.6 ship as `5.13.0+local.1`.
+
+### Local 5.6.6 - 2026-10-09
+
+#### Changed
+
+- **Figure 4's captions and title are three rows: flake count, nucleation
+  density, domain size.** Previously the count and size shared one line
+  with density below it. E.g. a frame now reads `n=86 + 8 edge` /
+  `135.4/(100µm)²` / `2.23±0.59µm`. A split frame keeps the same order with
+  one line per population for density and size (`n=2 small · 84 large + 8
+  edge`, then both densities, then both sizes); the split title puts each
+  row on one line. Uncalibrated figures skip the density row. No numbers
+  move.
+
+#### Fixed
+
+- **Figure 4's first-row captions no longer run into the title.** A split
+  frame's caption is five lines (two densities, two sizes, the edge count),
+  and the header only reserved space for the title itself; it now also
+  reserves room for the first row's tallest caption.
+
+### Local 5.6.5 - 2026-10-08
+
+#### Changed
+
+- **Flakes cut by the frame edge now count one half toward nucleation
+  density — density numbers move up.** `measure_domains()` used to drop
+  every domain touching the analysed region's border from both size and
+  count while still counting the full area, so density read low (1-18 % of
+  domains per frame on VB1P01 test frames, most on sparse frames). Edge
+  domains are still not sized, since their true size is cut off, but they
+  are now kept as `DomainResult.n_edge`/`edge_mask` and counted
+  `domain_size.EDGE_WEIGHT` = ½ each: a flake straddling the border is shared
+  with the neighbouring field, so ½ is unbiased on average. One rule for
+  rectangular and circular frames. `MIN_DOMAIN_PX` applies to edge domains
+  too, unchanged. Density is now (sized + ½ · edge) / area on figure 4's
+  captions and title, the summary-page table (new "Edge (×½)" column), the
+  `Domain_Size` sheet (new `Edge_N` column, unsplit row only) and the
+  on-screen caption. Size statistics (median, mean, std) and the small/large
+  split do not move; per-population densities still count only sized
+  domains, since an edge domain belongs to neither population.
+- **Figure 4 draws edge domains** in the measured-domain red at a much lower
+  alpha (0.25 vs 0.65), with a legend entry, so coverage matches the OM
+  overlay.
+
+### Local 5.6.4 - 2026-10-08
+
+#### Fixed
+
+- **Figure 4's title split into small/large populations with "Split into
+  small/large size populations" unticked.** The per-frame panels, the
+  summary-page table and the `Domain_Size` sheet already honoured the box,
+  but `build_domain_grid_figure()` re-ran the pooled split for its title on
+  its own. It now takes `detect_size_populations`, and the QC Report page
+  passes the checkbox to it like it does to `measure_domains()` and
+  `domain_size_stat()`. Unticked, the title shows the single pooled median,
+  mean and density; ticked, nothing changes. No measured numbers move.
+
+### Local 5.6.3 - 2026-10-08
+
+#### Fixed
+
+- **Domain size was under-reported by the frame's resize factor — numbers
+  move.** `contrast.load()` shrinks every frame to `MAXDIM` (1400 px) before
+  analysis, but the µm/px calibration (`data/om_calibration.json`) is
+  measured on the full-size camera image and was applied to those shrunk
+  pixels unconverted. On the VB1P01 camera's 2240×1680 frames each working
+  pixel is 1.6 camera pixels, so every diameter read 1.6× too small and
+  nucleation density 2.56× (1.6²) too high. `FrameResult` now carries
+  `scale` (working ÷ native pixels, from the new `contrast.load_scaled()`),
+  and `measure_domains()` divides the calibration by it. Diameters in µm go
+  up ×1.6 and density per 100 µm² down ×2.56 on 2240-px frames; frames
+  already ≤1400 px, pixel-unit (uncalibrated) results, the OM segmentation
+  itself, and the small/large population split (a ratio test) do not move.
+  The stored calibration values are unchanged and keep their meaning:
+  microns per native camera pixel. The reported size is still the
+  equivalent circular diameter, 2·√(area/π).
 
 ### Local 5.6.2 - 2026-10-03
 

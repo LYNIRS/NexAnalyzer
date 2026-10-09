@@ -357,8 +357,11 @@ def _add_optical_sheets(wb: Workbook, frames: Sequence,
 
 def _domain_columns(split: bool) -> Sequence[_Column]:
     columns = [_Column("Population", None, 12)] if split else []
+    columns += [_Column("Domains_N", "0", 12)]
+    # Edge domains are not sized, so they belong to neither population: the
+    # column exists only on the pooled (unsplit) row.
+    columns += [] if split else [_Column("Edge_N", "0", 10)]
     columns += [
-        _Column("Domains_N", "0", 12),
         _Column("Frames_N", "0", 10),
         _Column("Diameter_Median", "0.00", 16),
         _Column("Diameter_Mean", "0.00", 15),
@@ -402,7 +405,7 @@ def _add_domain_sheet(
         ]
     else:
         rows = [[
-            stat.n_domains, stat.n_frames,
+            stat.n_domains, stat.n_edge, stat.n_frames,
             stat.diameter_median, stat.diameter_mean, stat.diameter_std, stat.unit,
             stat.density_per_100um2,
         ]]

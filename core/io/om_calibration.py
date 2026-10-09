@@ -14,6 +14,12 @@ pixel-to-physical-distance calibration existed anywhere in the app before it,
 and nothing here should invent one. A magnification with no entry means
 "not calibrated", and callers must show that honestly (pixel units, not a
 guessed micron figure) rather than filling the gap themselves.
+
+A value is microns per *native camera* pixel -- measured on the full-size
+frame as the microscope saved it (2240 px wide on the VB1P01 camera), the
+way a scale bar or stage micrometer in the microscope software reads it.
+It is not per pixel of the working copy `contrast.load()` shrinks every
+frame to; `domain_size.measure_domains()` converts by `FrameResult.scale`.
 """
 
 import json

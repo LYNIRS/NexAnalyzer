@@ -58,6 +58,63 @@ RED_FILL = np.array([220, 30, 30])
 SMALL_FILL = np.array([235, 200, 30])
 LARGE_FILL = np.array([30, 120, 235])
 _FILL_ALPHA = 0.65
+#: Edge domains (touching the analysed border: counted one half toward
+#: density, never sized) reuse `RED_FILL` at this much lower alpha, so they
+#: read as the same flakes, drawn fainter -- present, but not measured.
+_EDGE_ALPHA = 0.25
+
+
+def _edge_overlay(over: np.ndarray, edge_mask: Optional[np.ndarray]) -> np.ndarray:
+    """`over` with `edge_mask`'s pixels tinted `RED_FILL` at `_EDGE_ALPHA`."""
+    if edge_mask is None or not edge_mask.any():
+        return over
+    over = over.copy()
+    over[edge_mask] = RED_FILL * _EDGE_ALPHA + over[edge_mask] * (1 - _EDGE_ALPHA)
+    return over
+
+
+def _panel_caption(domain: DomainResult) -> str:
+    """The lines above `domain`'s panel, in a fixed order: flake count, then
+    nucleation density, then domain size. A line with nothing to show (no
+    calibration, so no density; no sized domain, so no size) is left out
+    rather than drawn empty.
+
+    A split frame gives density and size one line per population -- a
+    per-panel column is narrow enough that "small: X/(100µm)²  ·  large:
+    Y/(100µm)²" centred as one line bled into the next panel's own title.
+    """
+    diam = domain.diameters_um if domain.calibrated else domain.diameters_px
+    unit = "µm" if domain.calibrated else "px"
+    edge = _edge_suffix(domain.n_edge)
+
+    def _size(values: np.ndarray) -> str:
+        std = values.std(ddof=1) if values.size > 1 else 0.0
+        return f"{values.mean():.2f}±{std:.2f}{unit}"
+
+    if domain.population_is_large is not None:
+        small_d = diam[~domain.population_is_large]
+        large_d = diam[domain.population_is_large]
+        lines = [f"n={small_d.size} small · {large_d.size} large{edge}"]
+        if domain.area_um2:
+            # Each population's own sized domains only: an edge domain has no
+            # size, so it belongs to neither (see domain_size._pooled_population_stat).
+            lines += [
+                f"small: {small_d.size / domain.area_um2 * DENSITY_AREA_UM2:.1f}/(100µm)²",
+                f"large: {large_d.size / domain.area_um2 * DENSITY_AREA_UM2:.1f}/(100µm)²",
+            ]
+        lines += [f"small: {_size(small_d)}", f"large: {_size(large_d)}"]
+        return "\n".join(lines)
+
+    lines = [f"n={domain.n}{edge}"]
+    if domain.area_um2:
+        lines.append(f"{domain.n_counted / domain.area_um2 * DENSITY_AREA_UM2:.1f}/(100µm)²")
+    if domain.n:
+        lines.append(_size(diam))
+    return "\n".join(lines)
+
+
+def _edge_suffix(n_edge: int) -> str:
+    return f" + {n_edge} edge" if n_edge else ""
 
 
 def _domain_overlay(original: np.ndarray, label_mask: np.ndarray) -> np.ndarray:
@@ -101,6 +158,7 @@ def build_domain_grid_figure(
     magnification: Optional[str] = None,
     points: Optional[Sequence[int]] = None,
     class_label: Optional[str] = None,
+    detect_size_populations: bool = True,
     dpi: int = 160,
 ) -> bytes:
     """
@@ -119,6 +177,14 @@ def build_domain_grid_figure(
     "Bilayer", "Below 2L") -- the same wording `contrast.class_labels()`
     gives the OM class table, so a saved figure says what it measured without
     the reader cross-referencing the reference-layer selector. None omits it.
+
+    `detect_size_populations` mirrors `measure_domains()`/`domain_size_stat()`'s
+    own argument and must be given the same value: it gates the pooled split
+    in the figure's title, which is computed here rather than read from a
+    `DomainResult`. False keeps the title to the single pooled population even
+    when the pooled diameters would clear `MIN_POPULATION_RATIO` -- before it
+    existed, an unticked "Split into small/large size populations" still got
+    a small/large title above per-frame panels that showed one population.
     """
     if not frames:
         raise ValueError("build_domain_grid_figure needs at least one frame")
@@ -134,26 +200,73 @@ def build_domain_grid_figure(
     units = _grid_units(len(points))
 
     # Computed before the figure exists, not after, because the suptitle's
-    # own line count -- 2 ordinarily, +2 when the pooled split fires, +1 more
-    # when density is shown -- decides how much header space `figsize` must
+    # own line count -- the title, then count, density (when calibrated) and
+    # size (when anything was sized) -- decides how much header space `figsize` must
     # reserve. `fig.suptitle` doesn't grow the figure to fit itself; a fixed
     # allowance sized for the 2-line case overflowed into the grid's own
     # first row the moment a 4-5 line title became possible.
     calibrated = any(d.calibrated for d in domain_results if d.n)
     pooled = pooled_diameters(domain_results, calibrated=calibrated)
     n_total = sum(d.n for d in domain_results)
+    n_edge_total = sum(d.n_edge for d in domain_results)
+    n_counted_total = sum(d.n_counted for d in domain_results)
     unit = "µm" if calibrated else "px"
     area_um2_total = (
         sum(d.area_um2 for d in domain_results if d.area_um2 is not None)
         if calibrated else None
     )
-    pooled_is_large = split_size_populations(pooled) if pooled.size else None
-    header_lines = 4 if pooled_is_large is not None else 2
-    if area_um2_total:
-        header_lines += 1
+    pooled_is_large = (
+        split_size_populations(pooled)
+        if detect_size_populations and pooled.size else None
+    )
+    # The title's summary, one line each in the same order as every panel
+    # caption: flake count, then nucleation density, then domain size.
+    edge = _edge_suffix(n_edge_total)
+    no_calibration = "  ·  no µm/px calibration set — pixel units shown"
+    if pooled_is_large is not None:
+        small_p, large_p = pooled[~pooled_is_large], pooled[pooled_is_large]
+        small_std = small_p.std(ddof=1) if small_p.size > 1 else 0.0
+        large_std = large_p.std(ddof=1) if large_p.size > 1 else 0.0
+        summary_lines = [
+            f"N = {n_total} domains total (small {small_p.size}  ·  large {large_p.size}){edge}"
+        ]
+        if area_um2_total:
+            summary_lines.append(
+                f"small: {small_p.size / area_um2_total * DENSITY_AREA_UM2:.1f}/(100µm)²  ·  "
+                f"large: {large_p.size / area_um2_total * DENSITY_AREA_UM2:.1f}/(100µm)²"
+            )
+        summary_lines.append(
+            f"small: {small_p.mean():.2f} ± {small_std:.2f} {unit}  ·  "
+            f"large: {large_p.mean():.2f} ± {large_std:.2f} {unit}"
+            + ("" if calibrated else no_calibration)
+        )
+    elif pooled.size:
+        std_v = float(pooled.std(ddof=1)) if pooled.size > 1 else 0.0
+        summary_lines = [f"N = {n_total} domains total{edge}"]
+        if area_um2_total:
+            summary_lines.append(
+                f"{n_counted_total / area_um2_total * DENSITY_AREA_UM2:.1f}/(100µm)²"
+            )
+        summary_lines.append(
+            f"median {float(np.median(pooled)):.2f} {unit}  "
+            f"·  mean {float(pooled.mean()):.2f} ± {std_v:.2f} {unit}"
+            + ("" if calibrated else no_calibration)
+        )
+    else:
+        summary_lines = [f"N = {n_total} domains total{edge}"]
+
     # 0.55 in/line reproduces the figure's own original fixed "+1.1" budget
-    # exactly at the 2-line case, scaled for however many lines there are.
-    header_in = 0.55 * header_lines
+    # exactly at the 2-line case (title + one summary line), scaled for
+    # however many lines there are.
+    header_in = 0.55 * (1 + len(summary_lines))
+    # The first row's panel captions grow upward into that header: a split
+    # frame's runs to five lines and reached the title's last line.
+    # `content_in` already fits two.
+    first_row = [by_domain.get(p) for p in points[:layout[0]]]
+    caption_lines = max(
+        (_panel_caption(d).count("\n") + 1 for d in first_row if d), default=2
+    )
+    header_in += 0.2 * max(0, caption_lines - 2)
     content_in = 3.15 * rows
     total_in = content_in + header_in
 
@@ -180,6 +293,7 @@ def build_domain_grid_figure(
         ]
 
         any_split = False
+        any_edge = False
         for (row, left), point in zip(cells, points):
             frame = by_point.get(point)
             domain = by_domain.get(point)
@@ -207,46 +321,17 @@ def build_domain_grid_figure(
                 ax_seg.set_title("no domain data", fontsize=_FS_COVERAGE, fontweight="bold")
                 continue
 
-            diam = domain.diameters_um if domain.calibrated else domain.diameters_px
-            panel_unit = "µm" if domain.calibrated else "px"
-            n = domain.n
             if domain.population_is_large is not None:
                 any_split = True
                 overlay_full = _split_domain_overlay(
                     frame.original, domain.label_mask, domain.population_is_large
                 )
-                small_d = diam[~domain.population_is_large]
-                large_d = diam[domain.population_is_large]
-                small_std = small_d.std(ddof=1) if small_d.size > 1 else 0.0
-                large_std = large_d.std(ddof=1) if large_d.size > 1 else 0.0
-                caption = (
-                    f"small: n={small_d.size}, {small_d.mean():.2f}±{small_std:.2f}{panel_unit}\n"
-                    f"large: n={large_d.size}, {large_d.mean():.2f}±{large_std:.2f}{panel_unit}"
-                )
-                if domain.area_um2:
-                    # Each population's density gets its own new line, not
-                    # combined onto one -- a per-panel column is narrow
-                    # enough that "small: X/(100µm)²  ·  large: Y/(100µm)²"
-                    # centred as one line was wide enough to bleed into the
-                    # next panel's own title.
-                    small_density = small_d.size / domain.area_um2 * DENSITY_AREA_UM2
-                    large_density = large_d.size / domain.area_um2 * DENSITY_AREA_UM2
-                    caption += (
-                        f"\nsmall: {small_density:.1f}/(100µm)²"
-                        f"\nlarge: {large_density:.1f}/(100µm)²"
-                    )
             else:
                 overlay_full = _domain_overlay(frame.original, domain.label_mask)
-                if n:
-                    mean_v = float(diam.mean())
-                    std_v = float(diam.std(ddof=1)) if n > 1 else 0.0
-                    caption = f"n={n}, {mean_v:.2f}±{std_v:.2f}{panel_unit}"
-                else:
-                    caption = "n=0"
-                if domain.area_um2:
-                    density = n / domain.area_um2 * DENSITY_AREA_UM2
-                    caption += f"\n{density:.1f}/(100µm)²"
+            caption = _panel_caption(domain)
 
+            any_edge = any_edge or bool(domain.n_edge)
+            overlay_full = _edge_overlay(overlay_full, domain.edge_mask)
             overlay, _ = _crop_to_valid(overlay_full, frame.valid)
             ax_seg.imshow(_dim(overlay, valid))
             ax_seg.axis("off")
@@ -259,6 +344,13 @@ def build_domain_grid_figure(
             ]
         else:
             legend_handles = [Patch(facecolor=RED_FILL / 255.0, label="Measured domain")]
+        if any_edge:
+            # The fill as it would sit on white, so the swatch is as faint as
+            # the flakes it names.
+            edge_rgb = (RED_FILL * _EDGE_ALPHA + 255.0 * (1 - _EDGE_ALPHA)) / 255.0
+            legend_handles.append(
+                Patch(facecolor=edge_rgb, label="Edge domain (not sized, counted ½ in density)")
+            )
         fig.legend(
             handles=legend_handles,
             loc="lower center", ncol=len(legend_handles), frameon=False, fontsize=_FS_PANEL + 1,
@@ -267,43 +359,9 @@ def build_domain_grid_figure(
 
         magnification_label = f" {magnification}" if magnification else ""
         class_suffix = f" — {class_label}" if class_label else ""
-        if pooled_is_large is not None:
-            small_p, large_p = pooled[~pooled_is_large], pooled[pooled_is_large]
-            small_std = small_p.std(ddof=1) if small_p.size > 1 else 0.0
-            large_std = large_p.std(ddof=1) if large_p.size > 1 else 0.0
-            summary_line = (
-                f"N = {n_total} domains total\n"
-                f"small: n={small_p.size}, {small_p.mean():.2f} ± {small_std:.2f} {unit}\n"
-                f"large: n={large_p.size}, {large_p.mean():.2f} ± {large_std:.2f} {unit}"
-            )
-            if area_um2_total:
-                small_density = small_p.size / area_um2_total * DENSITY_AREA_UM2
-                large_density = large_p.size / area_um2_total * DENSITY_AREA_UM2
-                summary_line += (
-                    f"\nsmall: {small_density:.1f}/(100µm)²  ·  "
-                    f"large: {large_density:.1f}/(100µm)²"
-                )
-            if not calibrated:
-                summary_line += "  ·  no µm/px calibration set — pixel units shown"
-        elif pooled.size:
-            median_v, mean_v, std_v = (
-                float(np.median(pooled)), float(pooled.mean()),
-                float(pooled.std(ddof=1)) if pooled.size > 1 else 0.0,
-            )
-            summary_line = (
-                f"N = {n_total} domains total  ·  median {median_v:.2f} {unit}  "
-                f"·  mean {mean_v:.2f} ± {std_v:.2f} {unit}"
-            )
-            if area_um2_total:
-                density_total = n_total / area_um2_total * DENSITY_AREA_UM2
-                summary_line += f"\n{density_total:.1f}/(100µm)²"
-            if not calibrated:
-                summary_line += "  ·  no µm/px calibration set — pixel units shown"
-        else:
-            summary_line = f"N = {n_total} domains total"
         fig.suptitle(
             f"{sample_name} — OM{magnification_label} domain size{class_suffix} "
-            f"({len(points)} positions, watershed-split)\n{summary_line}",
+            f"({len(points)} positions, watershed-split)\n" + "\n".join(summary_lines),
             fontsize=_FS_SUPTITLE, fontweight="bold",
         )
 

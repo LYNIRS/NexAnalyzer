@@ -303,6 +303,11 @@ class TestDomainSheet:
         assert _column(ws, "Diameter_Mean") == [pytest.approx(68.56)]
         assert "Population" not in _rows(ws)[0]
 
+    def test_an_unsplit_sample_carries_its_edge_count(self):
+        stat = _unsplit_domain_stat()._replace(n_edge=7)
+        ws = _build(domain_stat=stat)["Domain_Size"]
+        assert _column(ws, "Edge_N") == [7]
+
     def test_a_split_sample_writes_two_rows(self):
         ws = _build(domain_stat=_split_domain_stat())["Domain_Size"]
         assert _column(ws, "Population") == ["Small", "Large"]

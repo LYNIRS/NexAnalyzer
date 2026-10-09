@@ -586,11 +586,13 @@ def _add_domain_table(fig, stat: Optional[DomainSizeStat],
             for pop in stat.populations
         ]
     else:
-        headers = ["Domains (n)", "Frames", f"Median ({stat.unit})", f"Mean ± Std ({stat.unit})",
-                   "Density (/(100µm)²)"]
-        col_fracs = [0.15, 0.12, 0.20, 0.26, 0.27]
+        # "Edge (×½)": domains touching a frame's border -- not sized, so in
+        # no diameter column, but counted one half each in Density.
+        headers = ["Domains (n)", "Edge (×½)", "Frames", f"Median ({stat.unit})",
+                   f"Mean ± Std ({stat.unit})", "Density (/(100µm)²)"]
+        col_fracs = [0.13, 0.11, 0.10, 0.18, 0.23, 0.25]
         rows = [[
-            str(stat.n_domains), str(stat.n_frames),
+            str(stat.n_domains), str(stat.n_edge), str(stat.n_frames),
             f"{stat.diameter_median:.2f}", f"{stat.diameter_mean:.2f} ± {stat.diameter_std:.2f}",
             f"{stat.density_per_100um2:.1f}" if stat.density_per_100um2 is not None else _DASH,
         ]]

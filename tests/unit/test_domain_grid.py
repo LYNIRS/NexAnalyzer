@@ -188,3 +188,94 @@ class TestNucleationDensity:
         domain = _fake_domain(1, n=4, calibrated=True, area_um2=20.0)
         _, _, suptitle = _render_and_inspect([_fake_frame(1)], [domain], monkeypatch)
         assert "/(100µm)²" in suptitle
+
+
+class TestPooledSplitFollowsTheCheckbox:
+    """The defect this guards: the per-frame panels honoured "Split into
+    small/large size populations", but the title re-ran the pooled split on
+    its own, so an unticked box still got a small/large title."""
+
+    @staticmethod
+    def _bimodal_domain():
+        rng = np.random.default_rng(7)
+        diam = np.concatenate([rng.normal(1.0, 0.05, 20), rng.normal(5.0, 0.2, 20)])
+        label_mask = np.zeros((24, 32), dtype=int)
+        for i in range(diam.size):
+            label_mask[i // 20 + 5, i % 20 + 5] = i + 1
+        return DomainResult(
+            point=1, n=diam.size, diameters_px=np.zeros(0), diameters_um=diam,
+            calibrated=True, label_mask=label_mask, area_um2=400.0,
+        )
+
+    def test_unticked_keeps_the_title_to_one_population(self, monkeypatch):
+        _, _, suptitle = _render_and_inspect(
+            [_fake_frame(1)], [self._bimodal_domain()], monkeypatch,
+            detect_size_populations=False,
+        )
+        assert "small:" not in suptitle and "large:" not in suptitle
+        assert "median" in suptitle
+
+    def test_ticked_still_splits_the_title(self, monkeypatch):
+        _, _, suptitle = _render_and_inspect(
+            [_fake_frame(1)], [self._bimodal_domain()], monkeypatch,
+            detect_size_populations=True,
+        )
+        assert "small:" in suptitle and "large:" in suptitle
+
+
+class TestEdgeDomains:
+    @staticmethod
+    def _domain_with_edge():
+        domain = _fake_domain(1, n=4, calibrated=True, area_um2=20.0)
+        edge_mask = np.zeros((24, 32), dtype=bool)
+        edge_mask[0:3, 0:5] = True
+        from dataclasses import replace
+        return replace(domain, n_edge=2, edge_mask=edge_mask)
+
+    def test_captions_name_the_edge_domains_and_count_them_half(self, monkeypatch):
+        _, panel_titles, suptitle = _render_and_inspect(
+            [_fake_frame(1)], [self._domain_with_edge()], monkeypatch,
+        )
+        caption = next(t for t in panel_titles if "n=" in t)
+        # Count, then density -- (4 + 0.5 * 2) / 20 um2 * (100 um)^2 -- then size.
+        assert caption.split("\n") == ["n=4 + 2 edge", "2500.0/(100µm)²", "3.00±0.00µm"]
+        assert suptitle.split("\n")[1:] == [
+            "N = 4 domains total + 2 edge",
+            "2500.0/(100µm)²",
+            "median 3.00 µm  ·  mean 3.00 ± 0.00 µm",
+        ]
+
+    def test_a_split_caption_keeps_the_same_order(self, monkeypatch):
+        domain = self._domain_with_edge()
+        from dataclasses import replace
+        split = replace(domain, population_is_large=np.array([False, True, True, True]))
+        _, panel_titles, _ = _render_and_inspect([_fake_frame(1)], [split], monkeypatch)
+        caption = next(t for t in panel_titles if "n=" in t)
+        assert caption.split("\n") == [
+            "n=1 small · 3 large + 2 edge",
+            "small: 500.0/(100µm)²",
+            "large: 1500.0/(100µm)²",
+            "small: 3.00±0.00µm",
+            "large: 3.00±0.00µm",
+        ]
+
+    def test_an_uncalibrated_caption_skips_the_density_line(self, monkeypatch):
+        domain = _fake_domain(1, n=4, calibrated=False)
+        _, panel_titles, _ = _render_and_inspect([_fake_frame(1)], [domain], monkeypatch)
+        caption = next(t for t in panel_titles if "n=" in t)
+        assert caption.split("\n") == ["n=4", "3.00±0.00px"]
+
+    def test_edge_domains_are_drawn_fainter_than_measured_ones(self):
+        from modules.optical.viz.domain_grid import _domain_overlay, _edge_overlay
+
+        original = np.full((4, 4, 3), 180.0)
+        label_mask = np.zeros((4, 4), dtype=int)
+        label_mask[0, 0] = 1
+        edge_mask = np.zeros((4, 4), dtype=bool)
+        edge_mask[3, 3] = True
+        over = _edge_overlay(_domain_overlay(original, label_mask), edge_mask)
+
+        shift_measured = np.abs(over[0, 0] - original[0, 0]).sum()
+        shift_edge = np.abs(over[3, 3] - original[3, 3]).sum()
+        assert 0 < shift_edge < shift_measured
+        assert (over[1, 1] == original[1, 1]).all()

@@ -456,7 +456,8 @@ with st.expander("➕ New material", expanded=len(presets) == 0):
 st.markdown("---")
 st.subheader("Objective / Magnification Calibration")
 st.caption(
-    "Micron-per-pixel, by magnification group — not by material: a 50X "
+    "Micron-per-pixel of the full-size camera image (as saved by the "
+    "microscope, before any resizing), by magnification group — not by material: a 50X "
     "objective has the same field of view regardless of what film is under "
     "it. Used by the QC Report's domain-size analysis to convert measured "
     "pixel sizes into real units. A magnification with no row here is "

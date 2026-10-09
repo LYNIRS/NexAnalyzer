@@ -630,6 +630,9 @@ if scan is not None:
                                     class_label=dict(zip(
                                         TARGETS, class_labels(reference, state["low_coverage"])
                                     ))[state["domain_target"]],
+                                    detect_size_populations=bool(
+                                        state["split_size_populations"]
+                                    ),
                                 )
                             progress.complete("domain_size")
 
@@ -1007,8 +1010,10 @@ if _HAS_RESULTS:
                     if stat.density_per_100um2 is not None:
                         population_line += f"  \n{stat.density_per_100um2:.1f}/(100µm)²"
                 st.caption(
-                    f"**{class_label}** — {stat.n_domains} domains across "
-                    f"{stat.n_frames} frames "
+                    f"**{class_label}** — {stat.n_domains} domains"
+                    + (f" (+ {stat.n_edge} at the frame edge, counted ½ in density)"
+                       if stat.n_edge else "")
+                    + f" across {stat.n_frames} frames "
                     f"· {population_line}"
                     + ("" if stat.calibrated else
                        " — no µm/px calibration set for this magnification; "

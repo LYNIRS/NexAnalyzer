@@ -667,3 +667,98 @@ class TestPooledDiametersAndStat:
         scale = domain_size_module.DENSITY_AREA_UM2
         assert small_pop.density_per_100um2 == pytest.approx(100 / 110.0 * scale)
         assert large_pop.density_per_100um2 == pytest.approx(10 / 110.0 * scale)
+
+
+class TestNativePixelCalibration:
+    """The calibration is microns per *native camera* pixel, but measurement
+    runs on `contrast.load()`'s copy shrunk to `MAXDIM`. The defect this
+    guards: applying it to working pixels unconverted under-reported every
+    diameter by 1/scale -- 1.6x on the VB1P01 camera's 2240-px frames."""
+
+    def test_analyse_frame_records_the_resize_factor(self, tmp_path):
+        small = _frame(tmp_path, [], name="small.png")
+        assert small.scale == 1.0
+
+        path = tmp_path / "native.png"
+        Image.new("RGB", (2240, 1680), (180, 190, 195)).save(path)
+        native = analyse_frame(path, point=1, ref_label="2L")
+        assert native.scale == pytest.approx(1400 / 2240)  # 0.625
+        assert native.original.shape[:2] == (1050, 1400)
+
+    def test_calibration_is_divided_by_the_frame_scale(self, monkeypatch):
+        from dataclasses import replace
+
+        hi = np.zeros((60, 60), dtype=bool)
+        hi[10:50, 10:50] = True
+        lum = np.full((60, 60), 100.0)
+        lum[hi] = 102.2
+        _patch_analyse_array(monkeypatch, hi, lum)
+        frame = replace(_fake_frame_result(), scale=0.5)
+
+        result = domain_size_module.measure_domains(frame, target="above", um_per_px=0.1)
+
+        # One working pixel spans two camera pixels: 0.2 um, not 0.1.
+        assert result.diameters_um == pytest.approx(result.diameters_px * 0.2)
+        assert result.area_um2 == pytest.approx(60 * 60 * 0.2 ** 2)
+
+    def test_same_scene_at_two_camera_resolutions_measures_the_same(self, tmp_path):
+        """A 1400-px frame (not resized) and the same field shot at 2800 px
+        (resized by half) must report the same physical diameter when each
+        carries its own native calibration."""
+        blob = (slice(400, 560), slice(600, 760))
+        low = _frame_with_blobs(tmp_path, [blob], name="low.png", H=1050, W=1400)
+        high = tmp_path / "high.png"
+        Image.open(low).resize((2800, 2100), Image.Resampling.LANCZOS).save(high)
+
+        um_low = 0.1
+        r_low = measure_domains(
+            analyse_frame(low, point=1, ref_label="2L"), um_per_px=um_low)
+        r_high = measure_domains(
+            analyse_frame(high, point=1, ref_label="2L"), um_per_px=um_low / 2)
+
+        assert r_low.n == r_high.n == 1
+        assert r_high.diameters_um[0] == pytest.approx(r_low.diameters_um[0], rel=0.03)
+        assert r_high.area_um2 == pytest.approx(r_low.area_um2, rel=0.01)
+
+
+class TestEdgeDomains:
+    """Domains touching the analysed border are not sized (their size is cut
+    off) but are real flakes, counted `EDGE_WEIGHT` (one half) each toward
+    nucleation density -- on rectangular and circular frames alike."""
+
+    def test_an_edge_blob_is_counted_half_but_not_sized(self, tmp_path):
+        edge = int(300 * 0.05)  # RECT_MARGIN boundary, as in the border test above
+        frame = _frame(tmp_path, blobs=[
+            (slice(edge - 10, edge + 30), slice(150, 200)),  # straddles the edge
+            (slice(120, 170), slice(180, 230)),              # interior
+        ])
+        result = measure_domains(frame, um_per_px=0.1)
+
+        assert result.n == 1 and result.diameters_um.size == 1
+        assert result.n_edge == 1
+        assert result.n_counted == pytest.approx(1.5)
+        assert result.edge_mask.any()
+        assert not (result.edge_mask & (result.label_mask > 0)).any()
+
+    def test_an_edge_fragment_below_min_domain_px_is_not_counted(self, tmp_path):
+        edge = int(300 * 0.05)
+        frame = _frame(tmp_path, blobs=[(slice(edge - 10, edge + 30), slice(150, 200))])
+        result = measure_domains(frame, min_domain_px=100_000)
+
+        assert result.n_edge == 0
+        assert not result.edge_mask.any()
+
+    def test_density_counts_edge_domains_at_half_weight(self):
+        diam = np.full(4, 2.0)
+        results = [DomainResult(
+            point=1, n=4, diameters_px=np.zeros(0), diameters_um=diam,
+            calibrated=True, label_mask=np.zeros((10, 10), dtype=int),
+            area_um2=200.0, n_edge=2,
+        )]
+        stat = domain_size_stat(results)
+
+        assert stat.n_domains == 4 and stat.n_edge == 2
+        assert stat.density_per_100um2 == pytest.approx(
+            (4 + 0.5 * 2) / 200.0 * domain_size_module.DENSITY_AREA_UM2
+        )
+        assert stat.diameter_mean == pytest.approx(2.0)  # edge domains never sized

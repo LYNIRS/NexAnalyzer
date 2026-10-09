@@ -249,6 +249,30 @@ class TestPageFlow:
         assert stat.populations is None
         assert all(r.population_is_large is None for r in at.session_state["qc_report"]["domain_results"])
 
+    @pytest.mark.parametrize("ticked", [False, True])
+    def test_split_size_populations_reaches_the_figure_title(
+        self, tmp_path, monkeypatch, ticked
+    ):
+        """Figure 4's title runs its own pooled split; the checkbox must reach
+        it too, or an unticked box still gets a small/large title."""
+        import modules.optical.viz.domain_grid as domain_grid_module
+
+        seen = []
+        real = domain_grid_module.build_domain_grid_figure
+
+        def _spy(*args, **kwargs):
+            seen.append(kwargs.get("detect_size_populations"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(domain_grid_module, "build_domain_grid_figure", _spy)
+        at, _scan = _seeded_app(tmp_path)
+        at.session_state["qc_report"]["split_size_populations"] = ticked
+        at.run()
+        next(b for b in at.button if "Generate QC Report" in b.label).click().run()
+
+        assert not at.exception, [e.value for e in at.exception]
+        assert seen == [ticked]
+
     def test_split_size_populations_when_enabled_reaches_the_stat(self, tmp_path):
         """Ticking it must actually reach measure_domains()/domain_size_stat(),
         not just get accepted and ignored."""

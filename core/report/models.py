@@ -164,12 +164,18 @@ class DomainSizeStat(NamedTuple):
 
     ``area_um2`` is the sample's total analyzed area -- every frame's own
     `DomainResult.area_um2` summed -- and ``density_per_100um2`` is
-    ``n_domains / area_um2 * domain_size.DENSITY_AREA_UM2``, the nucleation
+    ``(n_domains + EDGE_WEIGHT * n_edge) / area_um2 * domain_size.DENSITY_AREA_UM2``,
+    the nucleation
     density scaled to flakes per (100 um)^2 rather than per um2 -- a rate
     over one um2 is a fraction far smaller than one for any real sample.
     Both `None` when the sample isn't calibrated: a density in 1/px² isn't
     comparable across magnifications, so it is omitted rather than invented,
     the same rule every other domain-size figure here already follows.
+
+    ``n_edge`` counts domains touching a frame's analysed border: not sized
+    (their size is cut off) and not in ``n_domains`` or any diameter field,
+    but counted at one half each (``domain_size.EDGE_WEIGHT``) in
+    ``density_per_100um2``.
     """
 
     n_domains: int
@@ -182,3 +188,4 @@ class DomainSizeStat(NamedTuple):
     populations: Optional[Tuple[SizePopulationStat, SizePopulationStat]] = None
     area_um2: Optional[float] = None
     density_per_100um2: Optional[float] = None
+    n_edge: int = 0
