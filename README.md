@@ -1,4 +1,4 @@
-# NexAnalyzer v4.5.0
+# NexAnalyzer v5.13.0+local.1
 
 Nexstrom's measurement data analyzer. A desktop web app that turns raw measurement files into
 fitted results and shareable reports, driven by per-material presets rather than manual
