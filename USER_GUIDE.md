@@ -278,6 +278,13 @@ Material presets are created and edited directly in the app (as of v2.11.0 — n
 
 To change a material later, expand it in the list on the same page, edit its fields, and click **"💾 Save"** (or **"🗑️ Delete"** to remove it).
 
+**Magnification calibration from a scale bar.** At the bottom of the same page, under
+**Objective / Magnification Calibration**, open **"📏 Measure from a scale-bar image"** and
+upload an OM image exported with a scale bar. The bar is outlined in red and its label
+(e.g. "20 µm") is read automatically — check both, and type the length if the label wasn't
+read. If the image is smaller than the camera's full frame (2240 px wide), the result is
+scaled to full-frame pixels. Pick the magnification and click **"💾 Save measured µm/px"**.
+
 ### 2. Load Your Spectrum Files
 
 1. In the sidebar under **Load Spectra**, click **"Browse Spectrum Files"**
@@ -358,6 +365,11 @@ it doesn't need to be removed.
    well as selecting a different tuning block.
 4. Pick the **Material** — one dropdown selects the Raman preset, the PL preset and the optical
    tuning for that material. Your last choice is remembered next time.
+5. **Correct Raman axis to laser line** (on by default, remembered, shared with the Spectra
+   page) shifts each Raman map so its laser line sits at 0 cm⁻¹ before fitting. An uncalibrated
+   session can sit several cm⁻¹ off (−3.9 to +1.7 on the IMEC-Nov maps), which moves every
+   Raman centre with it. Offsets under 0.3 cm⁻¹ are left alone, and the line found in each
+   file is written to the workbook and the summary page either way.
 
 ### 4. Check the inventory, then generate
 
@@ -391,9 +403,9 @@ stopping.
 | 2 | **OM** | Layer segmentation across the nine positions — original and overlay per frame |
 | 3 | **OM diagnostic** | The same, plus each frame's green-channel histogram with its mode and both thresholds marked |
 | 4 | **Raman** | The nine fitted Raman spectra, three per column, under one shared legend |
-| 5 | **Raman stats** | Fitted FWHM, peak centres and the diagnostic ratios across the positions, with the inherited spec lines drawn |
+| 5 | **Raman stats** | Fitted FWHM, the E2g+A1g centre, the defect (LA/E2g+A1g) and B2g (B2g/E2g+A1g) ratios across the positions, with the inherited spec lines drawn, plus a table of each quantity's pooled median, mean ± std, spec and n |
 | 6 | **PL** | The nine fitted PL spectra |
-| 7 | **PL stats** | The same panels for PL |
+| 7 | **PL stats** | The raw spectrum's FWHM and centre (fit-free maximum), then the fitted Exciton and Trion FWHM and centres |
 
 On screen, the summary page and both OM figures are shown inline; the fitted spectra and the
 stats panels sit behind expanders — they are what you open when something looks wrong.
@@ -415,7 +427,7 @@ lands beside it sharing that stem:
 | Sheet | Holds |
 |---|---|
 | `Summary` | Each technique's mean ± std table, the intensity ratios, and any point that failed to fit |
-| `Raman` / `PL` | One row per fitted peak per point — centre, intensity, FWHM and their stderrs, R², χ², and the file each row came from |
+| `Raman` / `PL` | One row per fitted peak per point — centre, intensity, FWHM and their stderrs, R², χ², and the file each row came from; Raman also has each file's `Laser_Line_cm1` and the `Axis_Shift_cm1` applied |
 | `OM_Stats` | Per-class coverage and contrast, with how many frames were noise-limited |
 | `OM_Points` | One row per frame: its coverages, contrasts, and the histogram landmarks the thresholds were placed from |
 

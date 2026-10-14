@@ -514,3 +514,37 @@ class TestPerPointOutlierRemoval:
 
         assert stat.n == 3
         assert stat.center_mean == pytest.approx((520.0 + 521.0 + 530.0) / 3)
+
+
+class TestRobustCv:
+    def test_it_is_the_normalised_iqr_over_the_median(self):
+        from modules.spectra.processing.peak_metrics import IQR_PER_SIGMA, robust_cv
+        values = np.array([8.0, 9.0, 10.0, 11.0, 12.0])  # Q1 9, Q3 11, median 10
+        assert robust_cv(values) == pytest.approx(2.0 / IQR_PER_SIGMA / 10.0 * 100.0)
+
+    def test_on_normal_data_it_reads_like_std_over_mean(self):
+        from modules.spectra.processing.peak_metrics import robust_cv
+        values = np.random.default_rng(0).normal(100.0, 5.0, 20000)
+        assert robust_cv(values) == pytest.approx(5.0, rel=0.03)
+
+    def test_an_outlier_barely_moves_it(self):
+        from modules.spectra.processing.peak_metrics import robust_cv
+        values = np.random.default_rng(1).normal(250.0, 0.3, 225)
+        spiked = np.append(values, 400.0)
+        assert robust_cv(spiked) == pytest.approx(robust_cv(values), rel=0.05)
+        assert np.std(spiked) / np.mean(spiked) > 20 * np.std(values) / np.mean(values)
+
+    def test_a_negative_median_gives_a_positive_cv(self):
+        from modules.spectra.processing.peak_metrics import robust_cv
+        assert robust_cv(np.array([-12.0, -11.0, -10.0, -9.0, -8.0])) > 0
+
+    @pytest.mark.parametrize("values", [np.array([]), np.array([0.0, 0.0, 0.0]), np.array([np.nan])])
+    def test_undefined_cases_are_none_and_print_a_dash(self, values):
+        from modules.spectra.processing.peak_metrics import format_robust_cv, robust_cv
+        assert robust_cv(values) is None
+        assert format_robust_cv(values) == "Robust CV = —"
+
+    def test_the_wording(self):
+        from modules.spectra.processing.peak_metrics import format_robust_cv
+        assert format_robust_cv(np.array([8.0, 9.0, 10.0, 11.0, 12.0])) == "Robust CV = 14.8%"
+        assert format_robust_cv(np.array([249.9, 250.0, 250.1])) == "Robust CV = 0.03%"

@@ -5,7 +5,7 @@ All notable changes to NexAnalyzer will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Local additions (on top of 5.13.0; app version 5.13.0+local.1)
+## Local additions (on top of 5.13.0; app version 5.13.0+local.8)
 
 Installation-specific changes carried on top of upstream. They were first
 numbered 5.3.1-5.6.1 on a v5.3.0 checkout, which collides with upstream's own
@@ -18,7 +18,202 @@ with 200-300 cm-1 now upstream's own WSe2_truncate preset.
 
 From Local 5.6.3 on, `core/version.py` reports these as `5.13.0+local.N`:
 the upstream release they sit on, plus a build tag that can never collide
-with a future upstream number. Local 5.6.3-5.6.6 ship as `5.13.0+local.1`.
+with a future upstream number. Local 5.6.3-5.6.6 ship as `5.13.0+local.1`;
+Local 5.7.0 ships as `5.13.0+local.2`; Local 5.7.1 as `5.13.0+local.3`;
+Local 5.7.2 as `5.13.0+local.4`; Local 5.7.3 as `5.13.0+local.5`;
+Local 5.7.4 as `5.13.0+local.6`; Local 5.7.5 as `5.13.0+local.7`;
+Local 5.7.6 as `5.13.0+local.8`.
+
+### Local 5.7.6 - 2026-10-14
+
+#### Added
+
+- **µm/px from a scale-bar image.** The Material Presets page's *Objective /
+  Magnification Calibration* section has a new **📏 Measure from a scale-bar
+  image** expander. Upload an OM image exported with a burned-in scale bar and
+  the bar is found and measured (sub-pixel, light-on-dark or dark-on-light),
+  and its label ("20 µm", "500 nm", ...) is read by template matching against
+  DejaVu Sans / Arial glyphs -- no Tesseract install needed. If the label
+  can't be read, the operator types the length; both lengths stay editable.
+  A downsized export is scaled to the native camera width (default 2240 px),
+  because the calibration is per native pixel: VBCA13's 1024-px
+  `Scale bar.png` (193 px = 20 µm) gives 0.10363 µm/px on the export and
+  **0.04737 µm per native px**. The stored value for the chosen magnification
+  is shown with the % difference before **Save** writes that one entry.
+  New module `modules/optical/processing/scale_bar.py`.
+
+#### Changed — numbers move
+
+- **100x recalibrated from that scale bar: 0.04669 → 0.047372 µm/px
+  (+1.46 %).** Every 100x domain size grows by 1.46 % (area by 2.9 %) and
+  100x nucleation density falls by 2.9 %. 50x is unchanged.
+
+### Local 5.7.5 - 2026-10-14
+
+#### Changed
+
+- **The QC Report's Raman quality figure has no summary table.** Its
+  right-hand column is now *B₂g Center & Ratio*: the **B₂g centre** strip plot
+  is back on top, with its 308 cm⁻¹ spec line, and the B₂g ratio
+  I(B₂g) / I(E₂g+A₁g) moves down into the cell the table held. Each panel
+  carries its own median and robust CV, which is what the table's Median
+  column repeated; its mean ± std and n columns are gone from the figure (they
+  remain in the workbook and on the summary page). Still three columns of two,
+  22 × 11. The table type, `SummaryTablePanel`, is removed with it. No number
+  moves; the PL figure is unchanged.
+
+### Local 5.7.4 - 2026-10-13
+
+#### Changed
+
+- **The QC Report's PL quality figure leads with the raw spectrum.** A new
+  first column, *Raw Spectrum*, plots each spectrum's fit-free maximum — its
+  FWHM and centre, the per-spectrum values behind the "Raw" row the summary
+  page and workbook already report — across the positions, with the same
+  median line and robust CV as every other panel. Every measured spectrum
+  contributes, not only those whose fit passed the R² gate, as with the Raw
+  row. No spec line on it: the 35 nm is the fitted Exciton/Trion's, and the
+  raw width spans both. Columns are now *Raw Spectrum*, *FWHM*, *Peak
+  Centers*: three of two, the same 22 × 11 canvas.
+- **The Exciton/Trion intensity ratio panel is removed.**
+- Raw values take PL's own cleaning (FWHM > 5 nm, widest 5 % dropped), which
+  removes cosmic-ray spikes, but in a separate pass from the fits, so the raw
+  maximum never counts as a spectrum's strongest peak for the 2 % near-zero
+  floor. **No fitted point moves**: the Exciton and Trion panels plot exactly
+  what they did. A PL material whose peaks the inherited columns don't name
+  keeps the raw column ahead of its own.
+- `build_peak_quality_figure` takes `raw_by_point`; Raman is unchanged.
+
+#### Fixed — Raman axis correction (Local 5.7.2)
+
+- **A filter shoulder taller than the laser line left a map uncorrected.**
+  On Samsung-Oct QC_KRX261001 (488 nm, wavelength axis converted to cm⁻¹)
+  four maps of nine had a notch-filter shoulder at +10 cm⁻¹ standing over the
+  +4.7 line. Only the tallest point was tried; it failed the ±10 offset test,
+  so those maps stayed 4.7 cm⁻¹ high and the sample's E2g+A1g read
+  251.98 ± 2.16 instead of ~250.2 ± 0.2. Two changes:
+  - Every prominent peak within ±25 cm⁻¹ is now tried, most prominent first,
+    and the first that passes all tests wins.
+  - **The offset is the session's.** A load of several files (a QC sample's
+    maps; files picked together on the Spectra page) is calibrated together:
+    a file whose own line is missing, or more than 0.5 cm⁻¹ from the median
+    of the others, takes that median, provided at least half the files found
+    a line and at least half agree. `LaserCalibration.from_session` marks
+    it; the file's own line, if any, is still recorded; the axis note says
+    how many files took the session's line. A file alone, or a session with
+    no majority, is calibrated exactly as before.
+- Unchanged on every other dataset checked: the 36 IMEC-Nov and 27 other
+  Samsung-Oct maps give the same offsets as before.
+
+### Local 5.7.3 - 2026-10-13
+
+#### Added
+
+- **Robust CV on every panel of the QC Report's Raman and PL quality
+  figures.** Each strip plot's legend now reads `Median = …` and, under it,
+  `Robust CV = X%`, where X = (IQR / 1.349) / |median| × 100 over *all* the
+  values that panel draws — every spectrum of every position, pooled, after
+  the same cleaning, i.e. exactly the set the dashed median line is taken
+  from. IQR / 1.349 is the IQR rescaled to a normal sigma, so on well-behaved
+  data it reads like std / mean, while a few bad fits barely move it.
+  Shown to two decimals below 10 % (peak centres sit near 0.05 %), one above;
+  `—` when undefined (no values, or a median of zero). One definition,
+  `peak_metrics.robust_cv` / `format_robust_cv`.
+
+#### Unchanged
+
+- No fitted number, table or workbook value moves; the figures gain a legend
+  line.
+
+### Local 5.7.2 - 2026-10-13
+
+#### Added
+
+- **Raman axis correction to the laser line.** Each Raman map is shifted as it
+  is loaded so its laser line sits at 0 cm⁻¹: one Gaussian fit to the line on
+  the map's averaged spectrum (maximum within ±25 cm⁻¹, fitted ±5 around it),
+  applied to every spectrum of that file. The IMEC-Nov sessions had it at
+  −3.9, −1.9 and +1.7 cm⁻¹, which spread the same bilayer WSe₂'s E2g+A1g over
+  247.6-253.1 cm⁻¹; corrected, the six wafers agree within 0.7 (251.0-251.7).
+  New module `modules/spectra/processing/axis_calibration.py`.
+- **Guards.** Offsets under 0.3 cm⁻¹ (a third of a detector step) are measured
+  but not applied, so a calibrated instrument reads its numbers back unchanged.
+  A line that isn't believable — data not reaching −10 cm⁻¹, FWHM outside
+  1.5-4, |offset| > 10, too little height over the fit residual — leaves the
+  axis exactly as read. PL is never touched.
+- **One setting, both pages.** *Correct Raman axis to laser line*, on by
+  default, persisted in `report_settings.json` and read by both the Spectra
+  sidebar and the QC Report. It applies at load, so files already on the
+  Spectra page keep their axis until reloaded; on the QC Report it is part of
+  the Raman fingerprint, so flipping it marks existing Raman results stale.
+- **Recorded everywhere the numbers go.** `SpectrumFile.laser_calibration`
+  (laser_line, fwhm, shift; saved in projects, absent = never checked). New
+  master-CSV columns `Laser_Line_cm1` / `Axis_Shift_cm1` after `X_Max`; the
+  same two as the last columns of the workbook's `Raman` sheet; a *Raman axis*
+  line in the workbook's Summary identity block and under the summary page's
+  Raman table. The line is recorded even when the correction is off. The
+  sidebar's quick single-spectrum CSV is unchanged.
+
+#### Changed — numbers move
+
+- **Every Raman centre moves by its map's laser offset** when the correction
+  is on (the default) and the offset is ≥ 0.3 cm⁻¹ — up to ~4 cm⁻¹ on the
+  IMEC-Nov data. Where peaks overlap, widths and the split between peaks move
+  too, because the preset seeds and bounds each peak at a fixed position and
+  the data now sits differently against them. Measured on IMC260805
+  (WSe2_truncate, laser +1.68): E2g+A1g centre 253.11 → 251.52, FWHM
+  5.79 → 5.43; 2LA centre −1.2 rather than −1.7, 2ZA(M) −0.7; mean R²
+  0.884 → 0.882. The corrected axis is the one the preset's 250 / 260 /
+  244.2 cm⁻¹ seeds were written for. Reports made before this version are on the uncorrected axis; to
+  compare against one, re-run with the correction off — the laser line is
+  still recorded then, so the offset to subtract is in the new workbook.
+
+### Local 5.7.1 - 2026-10-13
+
+#### Changed
+
+- **The QC Report's Raman quality figure is rearranged.** The defect ratio
+  (LA / E2g+A1g) moves under the E2g+A1g centre panel; the right-hand column
+  now holds the **B2g ratio, I(B2g) / I(E2g+A1g)**, above a **summary table**
+  giving each Raman quantity's pooled median, mean ± std, spec and n. The
+  B2g centre panel is gone, but its numbers and its 308 cm⁻¹ spec are a row of
+  the table. Columns are retitled *FWHM*, *Center & Defect Ratio* and
+  *B₂g Ratio & Summary*. Still three columns of two, so the image keeps its
+  22 × 11 proportions. The PL figure is unchanged.
+- **The stacking ratio C / LB is replaced by B2g / E2g+A1g everywhere it was
+  reported.** `peak_metrics.RAMAN_RATIO_PAIRS` feeds the figure, the summary
+  page's Raman table and the workbook, so all three change together. This
+  reverses the v3.10.0 swap. The fits themselves are unchanged; only which
+  ratio is reported moves.
+
+### Local 5.7.0 - 2026-10-10
+
+#### Added
+
+- **Linked peaks in material presets.** A peak template can now be tied to
+  another peak of the same block by label, with up to two rules: a fixed
+  energy offset (PL only; `ΔE (meV)`, e.g. −30 puts a trion 30 meV below its
+  exciton through E = hc/λ) and an intensity ceiling (`Max I ratio`, e.g. 1 =
+  never brighter than the reference). Three new optional columns in the
+  Material Presets peak table: *Linked to*, *ΔE (meV)*, *Max I ratio*. Both
+  rules are lmfit expressions inside `fit_voigt_peaks`; intensity is the
+  Voigt's maximum, as everywhere else. A linked fit is run from five
+  reference starting points and the lowest χ² kept, because the linked model
+  can have two minima on a single-line spectrum; it takes ~5× as long
+  (0.5-1.5 s per WSe₂ PL spectrum). The on-screen Fit Results table gains a
+  *Constraint* column whenever a fit has a linked peak, since a linked centre
+  is computed rather than measured. See `docs/Fitting_Algo.md` §3.4.
+- **`WSe2 X-T linked` preset.** WSe2's Raman and PL blocks (copied
+  2026-10-10, no optical block) with the PL Trion linked to the Exciton at
+  −30 meV and ≤ 1 × its intensity.
+
+#### Unchanged
+
+- **No existing preset's numbers move.** Unlinked peak tables take the same
+  single fit as before, and an unlinked template serializes exactly as it did,
+  so `preset_staleness` hashes, and with them every existing fit's staleness,
+  are unaffected. `materials.json` stays schema v2; the link keys appear only
+  on linked templates.
 
 ### Local 5.6.6 - 2026-10-09
 

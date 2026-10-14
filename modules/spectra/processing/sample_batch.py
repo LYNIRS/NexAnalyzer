@@ -10,8 +10,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from ..models.preset import MaterialPreset
 from core.report.models import SampleScan
-from ..models.spectrum import ProcessingSettings, SpectrumFile
+from ..models.spectrum import LaserCalibration, ProcessingSettings, SpectrumFile
 from .auto_workflow import execute_auto_workflow
+from .axis_calibration import calibrate_raman_session
 from .parser import parse_spectrum_multi
 
 ProgressCallback = Callable[[str, int, int], None]
@@ -23,6 +24,10 @@ class SampleBatchResult:
     pl_spectra: List[Tuple[int, SpectrumFile]] = field(default_factory=list)
     raman_errors: List[Tuple[int, str]] = field(default_factory=list)
     pl_errors: List[Tuple[int, str]] = field(default_factory=list)
+    #: One laser-line calibration per Raman *file* (point), every file that
+    #: parsed — including ones whose fits all failed, since the axis was still
+    #: checked. See `axis_calibration.axis_note`.
+    raman_calibrations: Dict[int, LaserCalibration] = field(default_factory=dict)
 
 
 def _run_one_technique(
@@ -32,6 +37,8 @@ def _run_one_technique(
     out_spectra: List[Tuple[int, SpectrumFile]],
     out_errors: List[Tuple[int, str]],
     progress_callback: Optional[ProgressCallback],
+    correct_raman_axis: bool = True,
+    out_calibrations: Optional[Dict[int, LaserCalibration]] = None,
 ) -> None:
     """Load + fit every spectrum in `files_by_point` against `preset`.
 
@@ -45,6 +52,10 @@ def _run_one_technique(
     either output list, callback never invoked). A parse or fit failure is
     recorded in `out_errors` and excluded from `out_spectra`; this never
     raises.
+
+    Raman files are calibrated against their laser line as they are parsed —
+    measured always, applied when `correct_raman_axis` — and each file's
+    calibration lands in `out_calibrations` and on its spectra.
     """
     if preset is None:
         return
@@ -59,6 +70,16 @@ def _run_one_technique(
             parsed.append((point, parse_spectrum_multi(files_by_point[point])))
         except Exception as e:
             out_errors.append((point, str(e)))
+
+    # One session: the sample's maps share an offset, so a map whose own
+    # line is missing or off takes the others' (see calibrate_raman_session).
+    calibrations: Dict[int, Optional[LaserCalibration]] = {point: None for point, _ in parsed}
+    if mode == "Raman" and parsed:
+        results = calibrate_raman_session([spectra for _, spectra in parsed], correct_raman_axis)
+        parsed = [(point, spectra) for (point, _), (spectra, _) in zip(parsed, results)]
+        calibrations = {point: cal for (point, _), (_, cal) in zip(parsed, results)}
+        if out_calibrations is not None:
+            out_calibrations.update(calibrations)
 
     total = sum(len(spectra) for _, spectra in parsed)
     if total == 0:
@@ -84,6 +105,7 @@ def _run_one_technique(
                     raw_data=spectrum_data,
                     processed_data=spectrum_data,
                     processing_settings=ProcessingSettings(),
+                    laser_calibration=calibrations[point],
                 )
                 result = execute_auto_workflow(spectrum_file, preset)
                 if result["success"]:
@@ -103,18 +125,24 @@ def run_sample_batch(
     raman_preset: Optional[MaterialPreset],
     pl_preset: Optional[MaterialPreset],
     progress_callback: Optional[ProgressCallback] = None,
+    correct_raman_axis: bool = True,
 ) -> SampleBatchResult:
     """
     Fit every discovered Raman/PL file in `scan` against its respective
     preset. A preset of None for a technique skips it entirely. A parse or
     fit failure for one point is recorded in the matching `*_errors` list
     and excluded from `*_spectra`; this never raises.
+
+    `correct_raman_axis` shifts each Raman file so its laser line sits at
+    0 cm⁻¹ (see `axis_calibration`); the line is measured either way.
     """
     result = SampleBatchResult()
 
     _run_one_technique(
         scan.raman_files, "Raman", raman_preset,
-        result.raman_spectra, result.raman_errors, progress_callback
+        result.raman_spectra, result.raman_errors, progress_callback,
+        correct_raman_axis=correct_raman_axis,
+        out_calibrations=result.raman_calibrations,
     )
     _run_one_technique(
         scan.pl_files, "PL", pl_preset,

@@ -1,4 +1,4 @@
-# NexAnalyzer v5.13.0+local.1
+# NexAnalyzer v5.13.0+local.8
 
 Nexstrom's measurement data analyzer. A desktop web app that turns raw measurement files into
 fitted results and shareable reports, driven by per-material presets rather than manual
@@ -80,9 +80,9 @@ streamlit run app.py
   | 2 | **OM** — layer segmentation across the grid positions |
   | 3 | **OM diagnostic** — the same, plus the green-channel histograms showing where each threshold landed |
   | 4 | **Raman** — the nine fitted Raman spectra |
-  | 5 | **Raman stats** — fitted FWHM, peak centres and diagnostic ratios, with the inherited spec lines drawn |
+  | 5 | **Raman stats** — fitted FWHM, E2g+A1g and B2g centres, defect and B2g ratios, each with its median and robust CV, with the inherited spec lines drawn |
   | 6 | **PL** — the nine fitted PL spectra |
-  | 7 | **PL stats** — the same panels for PL |
+  | 7 | **PL stats** — raw-spectrum FWHM and centre, then the fitted Exciton/Trion FWHM and centres |
 
 - **One workbook** carries every number behind them: `Summary`, `Raman`, `PL`, `OM_Stats`,
   `OM_Points`.

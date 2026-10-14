@@ -23,11 +23,20 @@ Every widget key below is namespaced by material *and* block. Two
 reports -- it silently serves one block's peak rows into the other.
 """
 
+import re
+
 import pandas as pd
 import streamlit as st
+from PIL import Image, ImageDraw
 
 from core.io.om_calibration import load_om_calibration, save_om_calibration
 from modules.optical.processing.contrast import layer_word
+from modules.optical.processing.scale_bar import (
+    DEFAULT_NATIVE_WIDTH,
+    detect_scale_bar,
+    read_scale_label,
+    um_per_native_px,
+)
 from modules.spectra.models.preset import (
     OPTICAL_LAYERS,
     MaterialPreset,
@@ -38,7 +47,8 @@ from modules.spectra.models.preset import (
 from modules.spectra.models.spectrum import DESPIKE_THRESHOLD_MAX, DESPIKE_THRESHOLD_MIN
 from modules.spectra.io.preset_store import load_store, save_presets
 
-PEAK_COLUMNS = ["peak_label", "center", "center_tolerance", "width_fwhm", "shape", "color"]
+PEAK_COLUMNS = ["peak_label", "center", "center_tolerance", "width_fwhm", "shape", "color",
+                "linked_to", "energy_offset_meV", "max_intensity_ratio"]
 BASELINE_ALGORITHMS = ["Polynomial", "ALS", "None (Skip)"]
 MODES = ["Raman", "PL"]
 
@@ -107,8 +117,21 @@ _OPTICAL_FIELDS = {
 
 def _peaks_to_df(peak_templates: list[PeakTemplate]) -> pd.DataFrame:
     if not peak_templates:
-        return pd.DataFrame(columns=PEAK_COLUMNS)
-    return pd.DataFrame([t.to_dict() for t in peak_templates], columns=PEAK_COLUMNS)
+        df = pd.DataFrame(columns=PEAK_COLUMNS)
+    else:
+        df = pd.DataFrame([t.to_dict() for t in peak_templates], columns=PEAK_COLUMNS)
+    # An all-empty "Linked to" column -- every unlinked block -- comes out as
+    # float NaN, and st.data_editor refuses a text editor on a float column.
+    df["linked_to"] = df["linked_to"].astype("string")
+    return df
+
+
+def _optional(row, column, cast):
+    """A link cell's value, or None for an empty one (NaN, None or blank text)."""
+    value = row.get(column)
+    if value is None or (not isinstance(value, str) and pd.isna(value)) or str(value).strip() == "":
+        return None
+    return cast(str(value).strip()) if cast is str else cast(value)
 
 
 def _df_to_peaks(df: pd.DataFrame) -> list[PeakTemplate]:
@@ -123,6 +146,9 @@ def _df_to_peaks(df: pd.DataFrame) -> list[PeakTemplate]:
             width_fwhm=float(row["width_fwhm"]),
             shape=float(row["shape"]),
             color=str(row["color"]).strip(),
+            linked_to=_optional(row, "linked_to", str),
+            energy_offset_meV=_optional(row, "energy_offset_meV", float),
+            max_intensity_ratio=_optional(row, "max_intensity_ratio", float),
         ))
     return peaks
 
@@ -214,8 +240,17 @@ def _render_technique_block(key_prefix: str, mode: str,
         "move in, and it is honoured exactly — since v4.0.0 the fitter no "
         "longer overwrites it with the mode default."
     )
+    st.caption(
+        "**Linked to / ΔE / Max I ratio** (optional) tie a peak to another "
+        "peak of this block, by label. ΔE (PL only) fixes this peak's energy "
+        "relative to the reference — e.g. −30 puts a trion 30 meV below its "
+        "exciton, and its own ± tolerance is then unused. Max I ratio caps "
+        "this peak's intensity at that multiple of the reference's — 1 means "
+        "never brighter. A linked block is fitted from several reference "
+        "starting points and the best fit kept, so it runs about 5× slower."
+    )
     peaks_df = st.data_editor(
-        _peaks_to_df(d.peak_templates) if d else pd.DataFrame(columns=PEAK_COLUMNS),
+        _peaks_to_df(d.peak_templates if d else []),
         num_rows="dynamic",
         width="stretch",
         column_config={
@@ -225,6 +260,9 @@ def _render_technique_block(key_prefix: str, mode: str,
             "width_fwhm": st.column_config.NumberColumn("FWHM", required=True),
             "shape": st.column_config.NumberColumn("Shape (0=Gauss, 1=Lorentz)", min_value=0.0, max_value=1.0, required=True),
             "color": st.column_config.TextColumn("Color (#RRGGBB)", required=True),
+            "linked_to": st.column_config.TextColumn("Linked to"),
+            "energy_offset_meV": st.column_config.NumberColumn("ΔE (meV)"),
+            "max_intensity_ratio": st.column_config.NumberColumn("Max I ratio", min_value=0.0),
         },
         key=f"{key_prefix}_peaks"
     )
@@ -415,6 +453,113 @@ def _render_preset_form(presets: dict, key_prefix: str,
         st.rerun()
 
 
+def _render_scale_bar_measurement(calibration: dict) -> None:
+    """Measure µm/px from an image with a burned-in scale bar, and save it."""
+    with st.expander("📏 Measure from a scale-bar image"):
+        st.caption(
+            "Upload an OM image exported with a scale bar. The bar is found and "
+            "measured automatically and its label is read; check both against "
+            "the highlighted image before saving. A downsized export is scaled "
+            "to the native camera width, since the calibration is per native pixel."
+        )
+        uploaded = st.file_uploader(
+            "Scale-bar image", type=["png", "jpg", "jpeg", "tif", "tiff", "bmp"],
+            key="scale_bar_upload",
+        )
+        if uploaded is None:
+            return
+
+        try:
+            image = Image.open(uploaded)
+            image.load()
+        except Exception as exc:  # unreadable or not an image
+            st.error(f"Could not open the image: {exc}")
+            return
+        file_key = f"{uploaded.name}_{uploaded.size}"
+        bar = detect_scale_bar(image)
+        label = read_scale_label(image, bar) if bar is not None else None
+
+        preview = image.convert("RGB")
+        if bar is not None:
+            pad = max(2, bar.thickness // 3)
+            ImageDraw.Draw(preview).rectangle(
+                [bar.x0 - pad, bar.y0 - pad, bar.x1 + pad, bar.y1 + pad],
+                outline=(255, 0, 0), width=max(2, pad),
+            )
+        st.image(preview, width="stretch")
+
+        col_px, col_um, col_native = st.columns(3)
+        with col_px:
+            if bar is None:
+                st.warning("No scale bar found. Enter its length in pixels.")
+            else:
+                st.caption(f"Detected bar: x {bar.x0}–{bar.x1}, y {bar.y0}–{bar.y1} (red box)")
+            length_px = st.number_input(
+                "Bar length (px)", min_value=0.0, step=1.0, format="%.2f",
+                value=float(round(bar.length_px, 2)) if bar is not None else 0.0,
+                key=f"scale_bar_px_{file_key}",
+            )
+        with col_um:
+            if label is not None:
+                st.caption(f"Read from label: **{label.text}**")
+            else:
+                st.caption("Label not read — enter the bar's length.")
+            length_um = st.number_input(
+                "Bar length (µm)", min_value=0.0, step=1.0, format="%.3f",
+                value=label.length_um if label is not None else 0.0,
+                key=f"scale_bar_um_{file_key}",
+            )
+        with col_native:
+            st.caption(f"Uploaded image: {image.width} × {image.height} px")
+            native_width = st.number_input(
+                "Native camera width (px)", min_value=1, step=1,
+                value=DEFAULT_NATIVE_WIDTH, key="scale_bar_native_width",
+                help="Width of the full-size frame the microscope saves. "
+                     "The calibration is per pixel of that frame.",
+            )
+
+        if length_px <= 0 or length_um <= 0:
+            st.info("Enter both bar lengths to compute µm/px.")
+            return
+
+        um_per_image_px = length_um / length_px
+        native = um_per_native_px(length_um, length_px, image.width, int(native_width))
+        lines = [f"**{um_per_image_px:.5f} µm/px** on this image"]
+        if image.width != native_width:
+            lines.append(
+                f"× {image.width} / {int(native_width)} → **{native:.5f} µm per native px**"
+            )
+        st.markdown(" &nbsp;·&nbsp; ".join(lines))
+
+        existing = sorted(calibration)
+        guess = re.search(r"(\d+)\s*[xX]", uploaded.name)
+        guessed = f"{guess.group(1)}x" if guess else None
+        options = existing + ["New…"]
+        default = existing.index(guessed) if guessed in existing else len(options) - 1
+        col_mag, col_new = st.columns(2)
+        with col_mag:
+            choice = st.selectbox("Save to magnification", options, index=default,
+                                  key=f"scale_bar_mag_{file_key}")
+        with col_new:
+            new_mag = st.text_input(
+                "New magnification", value=guessed or "", placeholder='e.g. "100x"',
+                disabled=choice != "New…", key=f"scale_bar_new_mag_{file_key}",
+            )
+        magnification = (new_mag if choice == "New…" else choice).strip()
+
+        if magnification in calibration:
+            stored = calibration[magnification]
+            st.caption(
+                f"Stored {magnification}: {stored:.5f} µm/px — "
+                f"this measurement differs by {(native - stored) / stored:+.2%}."
+            )
+        if st.button("💾 Save measured µm/px", disabled=not magnification,
+                     key="scale_bar_save"):
+            save_om_calibration({**calibration, magnification: round(native, 6)})
+            st.success(f"Saved {magnification}: {native:.5f} µm/px.")
+            st.rerun()
+
+
 st.title("🧪 Material Presets")
 st.markdown(
     "Create and edit the material presets used by **Run Auto-Workflow** / "
@@ -465,6 +610,8 @@ st.caption(
 )
 
 calibration = load_om_calibration()
+_render_scale_bar_measurement(calibration)
+
 calibration_df = pd.DataFrame(
     [{"Magnification": mag, "um_per_px": value} for mag, value in sorted(calibration.items())],
     columns=["Magnification", "um_per_px"],

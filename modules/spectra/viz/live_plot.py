@@ -736,5 +736,10 @@ def render_unified_plot():
             })
 
         df_results = pd.DataFrame(results_data)
+        constraints = {p.label: p.constraint for p in spectrum.fit_result.fitted_peaks if p.constraint}
+        if constraints:
+            # A linked peak's centre is computed from its reference, not
+            # measured; the column is what says so next to the number.
+            df_results["Constraint"] = df_results["Label"].map(constraints).fillna("")
         st.dataframe(df_results, hide_index=True, width="stretch")
         st.caption(f"✓ R² = {spectrum.fit_result.r_squared:.4f}, χ² = {spectrum.fit_result.chi_squared:.2e}")

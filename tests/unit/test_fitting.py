@@ -346,3 +346,134 @@ class TestCenterBoundsCannotInvert:
 
 
 RANGE_FOR_FIT = (6.674, 399.867)
+
+
+# ---------------------------------------------------------------------------
+# Linked peaks: a trion tied to its exciton by energy and/or intensity.
+# ---------------------------------------------------------------------------
+
+def _pl_voigt(x, center, intensity, sigma, gamma):
+    """A Voigt with the given maximum (intensity), as the fitter reports it."""
+    from lmfit.lineshapes import voigt
+    peak = voigt(np.array([center]), 1.0, center, sigma, gamma)[0]
+    return intensity * voigt(x, 1.0, center, sigma, gamma) / peak
+
+
+def _exciton_trion(x_ratio=0.4, exciton=760.0, offset_meV=-30.0):
+    from modules.spectra.processing.fitting import linked_center
+    x = np.linspace(680.0, 860.0, 900)
+    trion = linked_center(exciton, offset_meV)
+    y = _pl_voigt(x, exciton, 1000.0, 7.0, 4.0) + _pl_voigt(x, trion, 1000.0 * x_ratio, 9.0, 5.0)
+    return x, y
+
+
+def _linked_defs(offset_meV=-30.0, ratio=1.0, trion_start=780.0):
+    return [
+        PeakDefinition(center=755.0, intensity=1.0, width_fwhm=30.0, label="Exciton", shape=0.3,
+                       center_tolerance=15.0),
+        PeakDefinition(center=trion_start, intensity=1.0, width_fwhm=40.0, label="Trion", shape=0.3,
+                       center_tolerance=15.0, linked_to="Exciton",
+                       energy_offset_meV=offset_meV, max_intensity_ratio=ratio),
+    ]
+
+
+class TestLinkedPeaks:
+    def test_linked_center_is_an_energy_shift(self):
+        from modules.spectra.processing.fitting import HC_EV_NM, linked_center
+        trion = linked_center(760.0, -30.0)
+        assert (HC_EV_NM / 760.0 - HC_EV_NM / trion) * 1000 == pytest.approx(30.0, abs=1e-9)
+        assert trion > 760.0  # lower energy, longer wavelength
+        assert linked_center(trion, 30.0) == pytest.approx(760.0, abs=1e-9)
+
+    def test_an_energy_link_recovers_a_30_meV_pair_exactly(self):
+        from modules.spectra.processing.fitting import HC_EV_NM
+        from modules.spectra.processing.peak_metrics import peak_intensity
+        x, y = _exciton_trion(x_ratio=0.4)
+
+        result = fit_voigt_peaks(x, y, _linked_defs(), mode="PL")
+
+        assert result.success and result.r_squared > 0.999
+        exciton, trion = result.fitted_peaks
+        assert exciton.center == pytest.approx(760.0, abs=0.3)
+        assert (HC_EV_NM / exciton.center - HC_EV_NM / trion.center) * 1000 == pytest.approx(30.0, abs=1e-6)
+        assert peak_intensity(trion) / peak_intensity(exciton) == pytest.approx(0.4, abs=0.05)
+        assert trion.constraint == "E = Exciton − 30 meV; I ≤ 1 × Exciton"
+        assert exciton.constraint == ""
+
+    def test_the_intensity_cap_holds_when_the_data_wants_more(self):
+        from modules.spectra.processing.peak_metrics import peak_intensity
+        x, y = _exciton_trion(x_ratio=2.5)  # trion 2.5x brighter than the exciton
+
+        result = fit_voigt_peaks(x, y, _linked_defs(ratio=1.0), mode="PL")
+
+        assert result.success
+        exciton, trion = result.fitted_peaks
+        # The cap is on the analytic height; peak_intensity() is the component
+        # curve's maximum on the data grid, which can fall short of the height
+        # by a little more for one peak than the other (here 0.2 nm steps).
+        assert peak_intensity(trion) <= peak_intensity(exciton) * (1 + 1e-3)
+        assert trion.constraint.endswith("(at cap)")
+
+    def test_an_intensity_only_link_leaves_the_centre_free_in_its_window(self):
+        x, y = _exciton_trion(x_ratio=0.4)
+        defs = _linked_defs(offset_meV=None, ratio=1.0)
+
+        result = fit_voigt_peaks(x, y, defs, mode="PL")
+
+        trion = result.fitted_peaks[1]
+        assert defs[1].center_min <= trion.center <= defs[1].center_max
+        assert trion.constraint.startswith("I ≤ 1 × Exciton")
+
+    def test_a_linked_fit_runs_from_several_starts_and_a_free_one_once(self, monkeypatch):
+        import lmfit.model
+        from modules.spectra.processing.fitting import LINKED_START_FRACTIONS
+        calls = []
+        original = lmfit.model.Model.fit
+
+        def counting(self, *a, **kw):
+            calls.append(1)
+            return original(self, *a, **kw)
+
+        monkeypatch.setattr(lmfit.model.Model, "fit", counting)
+        x, y = _exciton_trion()
+
+        fit_voigt_peaks(x, y, _linked_defs(), mode="PL")
+        assert len(calls) == 1 + len(LINKED_START_FRACTIONS)
+
+        calls.clear()
+        free = [PeakDefinition(center=755.0, intensity=1.0, width_fwhm=30.0, label="Exciton", center_tolerance=15.0),
+                PeakDefinition(center=785.0, intensity=1.0, width_fwhm=40.0, label="Trion", center_tolerance=15.0)]
+        fit_voigt_peaks(x, y, free, mode="PL")
+        assert len(calls) == 1
+
+    def test_on_a_single_line_the_exciton_keeps_it(self):
+        # One line and no trion: the intensity cap forbids the trion taking
+        # the line, so the exciton must sit on it and the trion stay weaker.
+        from modules.spectra.processing.peak_metrics import peak_intensity
+        x = np.linspace(680.0, 860.0, 900)
+        y = _pl_voigt(x, 766.0, 900.0, 9.0, 8.0)
+
+        result = fit_voigt_peaks(x, y, _linked_defs(), mode="PL")
+
+        exciton, trion = result.fitted_peaks
+        assert exciton.center == pytest.approx(766.0, abs=1.0)
+        assert peak_intensity(trion) <= peak_intensity(exciton)
+
+    @pytest.mark.parametrize("mutate, message", [
+        (lambda d: setattr(d[1], "linked_to", "Nothing"), "exactly one other peak"),
+        (lambda d: setattr(d[1], "linked_to", "Trion"), "linked to itself"),
+        (lambda d: (setattr(d[0], "linked_to", "Trion"), setattr(d[0], "max_intensity_ratio", 1.0)),
+         "itself linked"),
+        (lambda d: setattr(d[1], "max_intensity_ratio", 0.0), "must be > 0"),
+    ])
+    def test_a_bad_link_is_refused(self, mutate, message):
+        x, y = _exciton_trion()
+        defs = _linked_defs()
+        mutate(defs)
+        with pytest.raises(ValueError, match=message):
+            fit_voigt_peaks(x, y, defs, mode="PL")
+
+    def test_an_energy_offset_is_pl_only(self):
+        x, y = _exciton_trion()
+        with pytest.raises(ValueError, match="PL only"):
+            fit_voigt_peaks(x, y, _linked_defs(), mode="Raman")

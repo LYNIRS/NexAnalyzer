@@ -314,6 +314,46 @@ def auto_find_peaks(x, y, mode="Raman", min_peaks=2, max_peaks=5, prominence_thr
 
 ---
 
+### 3.4 Linked Peaks (5.13.0+local.2)
+
+A preset peak may be tied to another peak of the same block, its *reference*,
+by label (`PeakTemplate.linked_to`). The link carries up to two rules, both
+applied in `fit_voigt_peaks` as lmfit expressions after the ordinary
+parameters are built (`_apply_links`):
+
+| Field | Rule | Expression |
+| --- | --- | --- |
+| `energy_offset_meV` (PL only) | this peak's energy = reference's + ΔE | `center = hc / (hc/center_ref + ΔE)`, hc = 1239.84193 eV·nm |
+| `max_intensity_ratio` | this peak's intensity ≤ r × reference's | new parameter `ratio ∈ [0, r]`; `amplitude = ratio × height_ref × area_per_height` |
+
+- *Intensity* is the Voigt's maximum, as everywhere in the app. The height is
+  lmfit's own `VoigtModel` height expression; `area_per_height` is its inverse
+  at this peak's own σ, γ, so the area tracks the widths as they move. The cap
+  is on the analytic heights; `peak_metrics.peak_intensity` reads the
+  component's maximum on the data grid, so at the cap the reported ratio can
+  exceed r by the grid sampling (~1e-5 relative at 0.2 nm).
+- An lmfit expression is still clipped to its parameter's [min, max], so the
+  linked peak's own centre window and area ceiling are lifted before the
+  expression is set. With an energy link, the peak's `center_tolerance` is
+  therefore unused.
+- **Multi-start.** A linked model can have more than one minimum. On a
+  single-line WSe₂ PL spectrum (VABD79 PL_8) the trion either takes the main
+  line, leaving a weak exciton shoulder, or goes to zero, depending on where
+  the exciton starts. A fit with any link is therefore run from the preset's
+  start plus each reference at 12.5/37.5/62.5/87.5 % of its centre window
+  (`LINKED_START_FRACTIONS`), and the lowest χ² is kept. An unlinked fit runs
+  once, exactly as before.
+- Links are one level deep (a reference may not itself be linked) and are
+  checked by one function, `peak.link_errors`, for both the preset editor and
+  the fitter.
+- The fitted peak carries a plain-language `FittedPeak.constraint`, e.g.
+  `E = Exciton − 30 meV; I ≤ 1 × Exciton (at cap)`, shown as a Constraint
+  column in the on-screen Fit Results table. A linked centre is computed, not
+  measured, and that column is what says so.
+
+Shipped as the `WSe2 X-T linked` preset: WSe2's Raman and PL blocks with the
+Trion at −30 meV and ≤ 1 × the Exciton.
+
 ## 4. Code Structure and Comments
 
 ### 4.1 File Organization

@@ -9,16 +9,18 @@ separately averaged intensities.
 
 The PL half is newer and carries its own hazards, each pinned below: PL has one
 spec value and not three, its cleaning rule is not Raman's, its marker is a
-median where Raman's is a mean, and its ratio column is one panel short of the
-others.
+median where Raman's is a mean, and its first column is the raw spectrum, which
+is not a fit and must not disturb the fits' cleaning.
 """
 
 import numpy as np
 import pytest
 
+from core.report.models import RAW_STAT_LABEL
 from modules.spectra.models.peak import FitResult, FittedPeak
-from modules.spectra.processing.peak_metrics import RAMAN_RATIO_PAIRS
+from modules.spectra.processing.peak_metrics import RAMAN_RATIO_PAIRS, RawPeakStats
 from modules.spectra.viz.peak_quality import (
+    _raw_records,
     PANEL_COLUMNS,
     PL_CLEANING,
     PL_PANEL_COLUMNS,
@@ -81,14 +83,34 @@ class TestRamanPanelDefinitions:
         assert len(PANEL_COLUMNS) == 3
         assert all(len(panels) == 2 for _title, panels in PANEL_COLUMNS)
 
-    def test_column_titles_match_the_inherited_figure(self):
+    def test_the_local_5_7_5_arrangement(self):
+        """Defect ratio under the centre panel (Local 5.7.1); the right-hand
+        column is the B2g centre with the B2g ratio under it, and no table
+        (Local 5.7.5)."""
+        cells = [[p.caption for p in panels] for _title, panels in PANEL_COLUMNS]
+        assert cells == [
+            ["E₂g + A₁g", "2LA(M)"],
+            ["E₂g + A₁g center", "Defect ratio"],
+            ["B₂g center", "B₂g ratio"],
+        ]
+
+    def test_the_b2g_centre_is_a_strip_plot_of_the_b2g_peak(self):
+        centre = PANEL_COLUMNS[2][1][0]
+        assert isinstance(centre, PeakPanel)
+        assert (centre.peak, centre.metric) == ("B2g", "center")
+
+    def test_every_cell_is_a_strip_plot(self):
+        assert all(isinstance(p, (PeakPanel, RatioPanel))
+                   for _title, panels in PANEL_COLUMNS for p in panels)
+
+    def test_column_titles_name_what_each_column_holds(self):
         assert [title for title, _ in PANEL_COLUMNS] == [
-            "FWHM", "Peak Centers", "Diagnostic Ratios"
+            "FWHM", "Center & Defect Ratio", "B₂g Center & Ratio"
         ]
 
     def test_the_inherited_spec_values_are_carried_over(self):
         """7.0, 308.0 and 0.13 are the values the wafer-comparison scripts
-        label "(Spec)". They are drawn and never evaluated."""
+        label "(Spec)". They are shown and never evaluated."""
         specs = {
             panel.caption: panel.spec
             for _title, panels in PANEL_COLUMNS for panel in panels
@@ -97,15 +119,20 @@ class TestRamanPanelDefinitions:
         assert specs["B₂g center"] == 308.0
         assert specs["Defect ratio"] == 0.13
 
-    def test_the_stacking_ratio_is_the_two_interlayer_modes(self):
-        """C over LB — shear against layer-breathing. Both are interlayer
-        vibrations, which is what makes the ratio a bilayer diagnostic."""
-        stacking = next(
+    def test_the_stacking_ratio_is_gone(self):
+        assert ("C", "LB") not in RAMAN_RATIO_PAIRS
+        captions = [getattr(p, "caption", None)
+                    for _t, panels in PANEL_COLUMNS for p in panels]
+        assert "Stacking ratio" not in captions
+
+    def test_the_b2g_ratio_is_b2g_over_the_in_plane_mode(self):
+        b2g = next(
             p for _t, panels in PANEL_COLUMNS for p in panels
-            if getattr(p, "caption", None) == "Stacking ratio"
+            if getattr(p, "caption", None) == "B₂g ratio"
         )
-        assert isinstance(stacking, RatioPanel)
-        assert (stacking.numerator, stacking.denominator) == ("C", "LB")
+        assert isinstance(b2g, RatioPanel)
+        assert (b2g.numerator, b2g.denominator) == ("B2g", "E2g+A1g")
+        assert b2g.spec is None
 
     def test_the_defect_ratio_is_la_over_the_in_plane_mode(self):
         defect = next(
@@ -120,9 +147,8 @@ class TestRamanPanelDefinitions:
         a comment saying they had to agree — which is not a mechanism. This
         compares against `peak_metrics`, not against hardcoded strings, so it
         fails if the figure ever stops reading the constant."""
-        drawn = next(
-            panels for title, panels in PANEL_COLUMNS if title == "Diagnostic Ratios"
-        )
+        drawn = [p for _title, panels in PANEL_COLUMNS for p in panels
+                 if isinstance(p, RatioPanel)]
 
         assert tuple((p.numerator, p.denominator) for p in drawn) == RAMAN_RATIO_PAIRS
 
@@ -138,18 +164,37 @@ class TestRamanPanelDefinitions:
         assert panels[1].spec is None
 
 
-class TestPlPanelDefinitions:
-    def test_the_columns_match_ramans_so_the_two_read_side_by_side(self):
-        assert [title for title, _ in PL_PANEL_COLUMNS] == [
-            title for title, _ in PANEL_COLUMNS
-        ]
+class TestRamanCanvas:
+    def test_the_canvas_keeps_its_three_by_two_aspect(self):
+        """The B2g centre takes the table's cell rather than adding one, so the
+        figure keeps the 22x11 proportions it has always had."""
+        n_cols = len(PANEL_COLUMNS)
+        n_rows = max(len(panels) for _t, panels in PANEL_COLUMNS)
+        assert (n_cols, n_rows) == (3, 2)
 
-    def test_the_ratio_column_is_one_panel_short_and_that_is_deliberate(self):
-        """PL defines exactly one ratio. Filling the empty cell would mean
-        inventing a second, or putting an amplitude panel in a column titled
-        "Diagnostic Ratios"."""
-        widths = [len(panels) for _title, panels in PL_PANEL_COLUMNS]
-        assert widths == [2, 2, 1]
+    def test_the_figure_renders_with_the_b2g_centre_on_top(self):
+        fits = [(point, _wse2_fit()) for point in range(1, 10) for _ in range(3)]
+        png = build_peak_quality_figure(fits, "S", spec=RAMAN_QUALITY)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestPlPanelDefinitions:
+
+    def test_raw_spectrum_column_comes_first_and_the_grid_is_three_by_two(self):
+        """Local 5.7.4: the raw spectrum's FWHM and centre lead; the
+        Exciton/Trion ratio column it replaced is gone."""
+        assert [title for title, _ in PL_PANEL_COLUMNS] == [
+            "Raw Spectrum", "FWHM", "Peak Centers"]
+        assert [len(panels) for _title, panels in PL_PANEL_COLUMNS] == [2, 2, 2]
+        raw = PL_PANEL_COLUMNS[0][1]
+        assert [(p.peak, p.metric) for p in raw] == [
+            (RAW_STAT_LABEL, "fwhm"), (RAW_STAT_LABEL, "center")]
+
+    def test_there_is_no_pl_ratio_panel(self):
+        assert not any(
+            isinstance(panel, RatioPanel)
+            for _title, panels in PL_PANEL_COLUMNS for panel in panels
+        )
 
     def test_the_only_pl_spec_is_the_thirty_five_nanometre_fwhm(self):
         """The inherited script draws exactly one PL reference line, gated on
@@ -160,6 +205,8 @@ class TestPlPanelDefinitions:
         }
         assert specs["Exciton"] == 35.0
         assert specs["Trion"] == 35.0
+        # The fitted peaks' spec: the raw width spans both and runs wider.
+        assert specs["Raw FWHM"] is None
         assert set(specs.values()) == {35.0, None}
 
     def test_the_centre_panels_carry_no_spec(self):
@@ -170,18 +217,8 @@ class TestPlPanelDefinitions:
             panel for _title, panels in PL_PANEL_COLUMNS for panel in panels
             if isinstance(panel, PeakPanel) and panel.metric == "center"
         ]
-        assert len(centres) == 2
+        assert len(centres) == 3  # raw, exciton, trion
         assert all(panel.spec is None for panel in centres)
-
-    def test_the_ratio_panel_carries_no_spec(self):
-        """The ancestor's unity line is grey dotted with no legend entry and is
-        never called a spec, unlike every line it does label "(Spec)"."""
-        ratio = next(
-            panel for _title, panels in PL_PANEL_COLUMNS for panel in panels
-            if isinstance(panel, RatioPanel)
-        )
-        assert (ratio.numerator, ratio.denominator) == ("Exciton", "Trion")
-        assert ratio.spec is None
 
     def test_the_units_are_nanometres_not_wavenumbers(self):
         labels = {
@@ -433,17 +470,34 @@ class TestBuildFigure:
 
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
-    def test_the_pl_figure_renders_with_its_ragged_ratio_column(self):
-        """Two columns of two and one of one. The old renderer hardcoded a 2x3
-        grid and `zip`ped panels against a fixed (top, bottom) pair, which
-        silently dropped a third panel and would have left this column's single
-        panel drawn in the wrong cell."""
+    def test_the_pl_figure_renders_with_its_raw_column(self):
         fits = [(point, _pl_fit()) for point in range(1, 10)]
+        raw = [(point, RawPeakStats(intensity=900.0, center=766.0, fwhm=35.0))
+               for point in range(1, 10)]
 
-        png = build_peak_quality_figure(fits, sample_name="HADG06", spec=PL_QUALITY)
+        png = build_peak_quality_figure(fits, sample_name="HADG06", spec=PL_QUALITY,
+                                        raw_by_point=raw)
 
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
         assert len(png) > 10_000
+
+    def test_the_pl_figure_without_raw_values_still_renders(self):
+        """The raw panels come back empty rather than the builder raising."""
+        fits = [(point, _pl_fit()) for point in range(1, 10)]
+
+        png = build_peak_quality_figure(fits, sample_name="NoRaw", spec=PL_QUALITY)
+
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_raw_values_alone_are_enough(self):
+        """Every fit lost at the R² gate still leaves each spectrum's maximum."""
+        raw = [(point, RawPeakStats(intensity=900.0, center=766.0, fwhm=35.0))
+               for point in range(1, 10)]
+
+        png = build_peak_quality_figure([], sample_name="AllGated", spec=PL_QUALITY,
+                                        raw_by_point=raw)
+
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
     def test_a_pl_sample_cleaned_down_to_nothing_still_renders(self):
         """Every fit below the centre floor. The panels come back empty rather
@@ -569,6 +623,15 @@ class TestColumnsForAMaterialTheInheritedPanelsDoNotName:
         """Nothing to build from, and an empty grid would raise."""
         assert RAMAN_QUALITY.columns_for([]) is PANEL_COLUMNS
 
+    def test_a_pl_fallback_keeps_the_raw_column_first(self):
+        """Every material's spectrum has a maximum, so a PL material whose
+        peaks the inherited columns don't name still gets the raw column."""
+        columns = PL_QUALITY.columns_for(["A0", "A-"])
+
+        assert columns[0] is PL_PANEL_COLUMNS[0]
+        assert [title for title, _ in columns] == ["Raw Spectrum", "FWHM", "Peak Centers"]
+        assert [panel.peak for panel in columns[1][1]] == ["A0", "A-"]
+
     def test_the_rendered_mos2_figure_plots_its_peaks(self):
         fits = [(point, self._mos2_fit()) for point in range(1, 4)]
 
@@ -576,3 +639,72 @@ class TestColumnsForAMaterialTheInheritedPanelsDoNotName:
             fits, "MoS2-01", material_name="MoS₂", spec=RAMAN_QUALITY)
 
         assert png.startswith(b"\x89PNG")
+
+
+class TestRawRecords:
+    """The raw maximum is plotted beside the fits but must not enter their
+    cleaning: as a spectrum's "strongest peak" it would raise the 2 % floor."""
+
+    def test_one_record_per_measurable_spectrum(self):
+        raw = [(1, RawPeakStats(900.0, 766.0, 35.0)),
+               (2, RawPeakStats(0.0, 700.0, None)),  # flat: no width, no record
+               (3, None)]
+        records = _raw_records(raw, first_index=10)
+
+        assert [(r.point, r.spectrum, r.label) for r in records] == [(1, 10, RAW_STAT_LABEL)]
+
+    def test_adding_raw_values_does_not_change_the_fitted_peaks_drawn(self, monkeypatch):
+        """A weak trion that survives the floor against its own exciton (5 %)
+        would fail it against a raw maximum 20x higher (0.5 %)."""
+        from modules.spectra.viz import peak_quality
+
+        drawn = []
+        original = peak_quality._draw_panel
+        monkeypatch.setattr(peak_quality, "_draw_panel",
+                            lambda ax, values, *a, **kw: drawn.append(values) or original(ax, values, *a, **kw))
+        fits = [(p, _pl_fit(exciton=200.0, trion=10.0)) for p in range(1, 4)]
+        raw = [(p, RawPeakStats(intensity=4000.0, center=770.0, fwhm=35.0)) for p in range(1, 4)]
+
+        build_peak_quality_figure(fits, "S", spec=PL_QUALITY, raw_by_point=raw)
+        trion_fwhm = drawn[3]  # Raw FWHM, Raw centre, Exciton FWHM, Trion FWHM
+
+        assert sorted(trion_fwhm) == [1, 2, 3]
+
+    def test_raw_values_go_through_pl_cleaning(self):
+        """A cosmic ray reads as a sub-nanometre "peak"; the FWHM floor drops it."""
+        raw = [(1, RawPeakStats(5000.0, 633.0, 0.4)), (1, RawPeakStats(900.0, 766.0, 35.0))]
+
+        kept = _clean(_raw_records(raw, first_index=0), PL_CLEANING)
+
+        assert [r.center for r in kept] == [766.0]
+
+
+class TestRobustCvLegend:
+    def test_every_drawn_panel_says_its_robust_cv_under_the_median(self, monkeypatch):
+        import matplotlib.axes
+        legends = []
+        original = matplotlib.axes.Axes.legend
+
+        def recording(self, *a, **kw):
+            legend = original(self, *a, **kw)
+            legends.append([t.get_text() for t in legend.get_texts()])
+            return legend
+
+        monkeypatch.setattr(matplotlib.axes.Axes, "legend", recording)
+        fits = [(p, _wse2_fit()) for p in range(1, 10) for _ in range(3)]
+        build_peak_quality_figure(fits, "S", spec=RAMAN_QUALITY)
+
+        assert legends
+        for texts in legends:
+            assert texts[0].startswith("Median = ")
+            assert texts[1].startswith("Robust CV = ")
+
+    def test_the_pl_figure_carries_it_too(self, monkeypatch):
+        import matplotlib.axes
+        legends = []
+        original = matplotlib.axes.Axes.legend
+        monkeypatch.setattr(matplotlib.axes.Axes, "legend",
+                            lambda self, *a, **kw: legends.append(original(self, *a, **kw)) or legends[-1])
+        fits = [(p, _pl_fit()) for p in range(1, 10) for _ in range(3)]
+        build_peak_quality_figure(fits, "S", spec=PL_QUALITY)
+        assert legends and all(lg.get_texts()[1].get_text().startswith("Robust CV = ") for lg in legends)

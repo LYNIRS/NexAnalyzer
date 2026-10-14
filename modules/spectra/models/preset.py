@@ -7,7 +7,7 @@ that enable automated workflow execution.
 
 from dataclasses import dataclass, field, fields
 from typing import Dict, List, Tuple, Optional
-from .peak import MAX_PEAKS, PeakDefinition
+from .peak import MAX_PEAKS, PeakDefinition, link_errors
 from .spectrum import DESPIKE_THRESHOLD_MAX, DESPIKE_THRESHOLD_MIN
 
 #: Layers an optical block may be keyed by. The stored form, never the words
@@ -69,6 +69,13 @@ class PeakTemplate:
 
     This is used in presets to define initial peak guesses with
     flexible center position bounds (center ± tolerance).
+
+    The three link fields tie this peak to another of the same block -- e.g.
+    a trion 30 meV below its exciton and never brighter than it. They default
+    to None, and an unlinked template serializes exactly as it did before they
+    existed: `preset_staleness` hashes `to_dict()`, so writing three nulls into
+    every template would have marked every existing fit stale. See
+    `peak.link_errors` for the rules.
     """
     peak_label: str
     center: float
@@ -76,6 +83,15 @@ class PeakTemplate:
     width_fwhm: float
     shape: float  # Voigt mixing: 0=Gaussian, 1=Lorentzian
     color: str  # Hex color for plotting
+    linked_to: Optional[str] = None  # label of the reference peak
+    energy_offset_meV: Optional[float] = None  # this peak's E minus the reference's
+    max_intensity_ratio: Optional[float] = None  # intensity ≤ ratio × reference's
+
+    _LINK_FIELDS = ("linked_to", "energy_offset_meV", "max_intensity_ratio")
+
+    def link(self) -> tuple:
+        """(linked_to, energy_offset_meV, max_intensity_ratio), for `link_errors`."""
+        return tuple(getattr(self, f) for f in self._LINK_FIELDS)
 
     def to_peak_definition(
         self,
@@ -119,6 +135,9 @@ class PeakTemplate:
             shape=self.shape,
             color=self.color,
             center_tolerance=self.center_tolerance,
+            linked_to=self.linked_to,
+            energy_offset_meV=self.energy_offset_meV,
+            max_intensity_ratio=self.max_intensity_ratio,
         )
 
         # Calculate auto-bounds using existing logic. This reads
@@ -128,8 +147,8 @@ class PeakTemplate:
         return peak
 
     def to_dict(self) -> dict:
-        """Serialize to dictionary for JSON export."""
-        return {
+        """Serialize to dictionary for JSON export. Link fields only when set."""
+        out = {
             "peak_label": self.peak_label,
             "center": self.center,
             "center_tolerance": self.center_tolerance,
@@ -137,6 +156,8 @@ class PeakTemplate:
             "shape": self.shape,
             "color": self.color,
         }
+        out.update({f: getattr(self, f) for f in self._LINK_FIELDS if getattr(self, f) is not None})
+        return out
 
     @classmethod
     def from_dict(cls, data: dict) -> "PeakTemplate":
@@ -186,12 +207,13 @@ class TechniquePreset:
     # Semicolon-separated ranges (e.g., "1200-1400; 2600-2800")
     exclusion_ranges: Optional[str] = None
 
-    def validate(self) -> List[str]:
+    def validate(self, mode: Optional[str] = None) -> List[str]:
         """
         Error messages for this block alone (empty list if valid).
 
         The caller prefixes each with the technique name, since a material
-        reports all of its blocks' errors together.
+        reports all of its blocks' errors together. `mode` is that technique
+        ("Raman"/"PL"), when known: a peak link's energy offset is PL-only.
         """
         errors = []
 
@@ -270,6 +292,12 @@ class TechniquePreset:
                 errors.append(
                     f"Peak {i+1} ({template.peak_label}): color must be hex format #RRGGBB"
                 )
+
+        errors.extend(link_errors(
+            [t.peak_label for t in self.peak_templates],
+            [t.link() for t in self.peak_templates],
+            mode,
+        ))
 
         return errors
 
@@ -527,7 +555,7 @@ class MaterialPreset:
         for mode, attribute in self._BLOCKS.items():
             block = getattr(self, attribute)
             if block is not None:
-                errors.extend(f"{mode}: {e}" for e in block.validate())
+                errors.extend(f"{mode}: {e}" for e in block.validate(mode))
 
         for layer, params in self.optical.items():
             if layer not in OPTICAL_LAYERS:

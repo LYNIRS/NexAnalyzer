@@ -142,6 +142,46 @@ def iqr_mask(values: np.ndarray) -> np.ndarray:
     return (values >= q1 - IQR_FENCE * iqr) & (values <= q3 + IQR_FENCE * iqr)
 
 
+#: IQR of a normal distribution in units of its standard deviation (2 × 0.6745).
+#: Dividing an IQR by it gives a robust estimate of sigma.
+IQR_PER_SIGMA = 1.349
+
+
+def robust_cv(values: np.ndarray) -> Optional[float]:
+    """
+    Robust coefficient of variation, in percent: (IQR / 1.349) / |median| × 100.
+
+    The ordinary CV (std / mean) is moved a long way by one bad fit; this one
+    swaps std for the IQR rescaled to a normal sigma, and mean for the median,
+    so a few outliers barely change it while on well-behaved, roughly normal
+    data it reads about the same as std / mean. Taken over *all* the values
+    given -- the QC Report passes every spectrum of every position, pooled, the
+    same set its dashed median line is drawn from.
+
+    None when there is nothing to judge: no values, or a median of zero (a
+    ratio of quantities fitted to nothing), where a percentage is undefined.
+    """
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return None
+    median = float(np.median(values))
+    if median == 0:
+        return None
+    q1, q3 = np.percentile(values, [25, 75])
+    return float((q3 - q1) / IQR_PER_SIGMA / abs(median) * 100.0)
+
+
+def format_robust_cv(values: np.ndarray) -> str:
+    """The QC Report's wording: "Robust CV = 1.23%", or "Robust CV = —" when undefined."""
+    cv = robust_cv(values)
+    if cv is None:
+        return "Robust CV = —"
+    # Peak centres sit near 0.05 % (a 0.1 cm⁻¹ spread on 250 cm⁻¹), so two
+    # decimals are kept below 10 % rather than rounding them all to 0.0 %.
+    return f"Robust CV = {cv:.2f}%" if cv < 10 else f"Robust CV = {cv:.1f}%"
+
+
 def filter_fits_by_quality(
     fits_by_point: Sequence[Tuple[int, FitResult]],
     r_squared_min: float = R_SQUARED_MIN,
@@ -322,13 +362,12 @@ def aggregate_raw_peak_stats(spectra) -> Optional[PeakStat]:
     )
 
 
-RAMAN_RATIO_PAIRS: Tuple[Tuple[str, str], ...] = (("LA", "E2g+A1g"), ("C", "LB"))
+RAMAN_RATIO_PAIRS: Tuple[Tuple[str, str], ...] = (("LA", "E2g+A1g"), ("B2g", "E2g+A1g"))
 """The WSe2 bilayer quality indicators, as (numerator, denominator) labels.
 
 - ``LA / E2g+A1g`` — the defect ratio: disorder relative to the in-plane mode.
-- ``C / LB`` — the stacking ratio: the shear mode against the layer-breathing
-  mode. Both are interlayer vibrations, so their ratio speaks directly to how
-  the two layers sit on each other, which is what a bilayer wafer is judged on.
+- ``B2g / E2g+A1g`` — the B2g ratio: the interlayer-coupling mode, Raman-silent
+  in a monolayer, against the in-plane mode.
 
 One constant, because two surfaces read it: the QC Report's Raman summary table
 and the Raman quality figure's ratio panels. They were separate literals until
@@ -336,8 +375,9 @@ v5.0.0 — one in the page, one in the figure module — with a comment in each
 saying they had to agree, which is not a mechanism. A figure and a table
 disagreeing about which ratios matter is the exact failure that comment feared.
 
-B2g / E2g+A1g was reported until v3.10.0 and was dropped in favour of the
-stacking ratio. Any pair whose labels aren't both present in a fit is dropped
+History: B2g / E2g+A1g was reported until v3.10.0, then replaced by the
+stacking ratio C / LB; Local 5.7.1 brought B2g / E2g+A1g back in place of C / LB.
+Any pair whose labels aren't both present in a fit is dropped
 automatically (see `compute_peak_intensity_ratio`), so this list is safe for
 materials that don't define these peaks.
 """

@@ -1,7 +1,8 @@
 """
 Persisted per-installation settings for the QC Report page: the default
-material, whether to run domain-size measurement, and whether that
-measurement also tests for a small/large size-population split.
+material, whether to run domain-size measurement, whether that
+measurement also tests for a small/large size-population split, and whether
+Raman axes are corrected to the laser line (shared with the Spectra page).
 
 A small JSON sidecar (separate from data/materials.json, whose schema/tests
 this deliberately doesn't touch) so the page can remember an operator's last
@@ -102,3 +103,26 @@ def save_split_size_populations(value: bool, path: Optional[Union[str, Path]] = 
     """Persist `value` as the default for the size-population split checkbox."""
     path = Path(path) if path is not None else get_report_settings_path()
     _save_document(path, {"split_size_populations": value})
+
+
+def load_correct_raman_axis(path: Optional[Union[str, Path]] = None) -> bool:
+    """
+    Whether Raman maps are shifted so their laser line sits at 0 cm⁻¹ when
+    loaded (see modules.spectra.processing.axis_calibration).
+
+    True if the file doesn't exist, is malformed, or has no such key -- an
+    uncalibrated session moves every Raman centre by several cm⁻¹, while a
+    calibrated one falls inside the calibration's deadband and is left as
+    read, so on is the setting that cannot make a good session worse. One
+    setting for both the Spectra page and the QC Report, so the two cannot
+    load the same file onto different axes.
+    """
+    path = Path(path) if path is not None else get_report_settings_path()
+    value = _load_document(path).get("correct_raman_axis")
+    return value if isinstance(value, bool) else True
+
+
+def save_correct_raman_axis(value: bool, path: Optional[Union[str, Path]] = None) -> None:
+    """Persist `value` as the Raman laser-line axis correction setting."""
+    path = Path(path) if path is not None else get_report_settings_path()
+    _save_document(path, {"correct_raman_axis": value})

@@ -76,6 +76,9 @@ _RAMAN_TABLE_TOP = 1.22
 # through the table underneath as soon as a second one was added.
 _TABLE_GAP = 0.54  # Raman table's bottom to the PL caption, which is 0.27 of it
 _TABLE_MIN_H = 0.90
+# The Raman axis note's top, below the Raman table. A 9 pt line is ~0.13 in,
+# so it ends by 0.19 and clears the PL caption, centred 0.40 below the table.
+_AXIS_NOTE_DROP = 0.06
 
 # ---- Fit grid page: 3x3 fitted-spectrum grid, with one shared legend ----
 # The legend and axis titles live on the page rather than inside each cell
@@ -655,9 +658,15 @@ def build_summary_figure(
     show_fwhm_v1: bool = False,
     domain_stat: Optional[DomainSizeStat] = None,
     domain_class_label: Optional[str] = None,
+    raman_axis_note: Optional[str] = None,
     dpi: int = 144,
 ) -> bytes:
     """Render the overview page and return it as PNG bytes.
+
+    `raman_axis_note` is one line under the Raman table saying whether its
+    centres are on a laser-corrected axis — a plain string for the same reason
+    as `om_threshold_note`: the calibration lives in `modules`. None draws
+    nothing.
 
     `raman_ratios` is a sequence of (label, (median, MAD, n)) — per-point
     peak-intensity ratios (see `peak_metrics.compute_peak_intensity_ratio`)
@@ -694,6 +703,10 @@ def build_summary_figure(
             fig, "Raman", raman_stats, _TABLE_LEFT, _RAMAN_TABLE_TOP, _TABLE_W,
             raman_height, ratios=raman_ratios, show_fwhm_v1=show_fwhm_v1,
         )
+        if raman_axis_note and raman_stats:
+            # In the gap above the PL caption, which sits _TABLE_GAP / 2 lower.
+            _text(fig, _TABLE_LEFT, _RAMAN_TABLE_TOP + raman_height + _AXIS_NOTE_DROP,
+                  raman_axis_note, size=_FS_OM_NOTE, color=_MUTED_TEXT, va="top")
         pl_top = _RAMAN_TABLE_TOP + raman_height + _TABLE_GAP
         pl_height = _table_height(len(pl_stats or []))
         _add_stats_table(

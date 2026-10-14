@@ -5,7 +5,8 @@ Two shapes, keyed to what the caller is holding:
 
 - `export_fit_params_csv()` — the current spectrum only (sidebar Quick Export).
 - `export_master_csv()` — every fitted file, plus provenance columns
-  (auto-detected mode, X-range crop, convergence time) and, for PL, a leading
+  (auto-detected mode, X-range crop, Raman laser line and axis shift,
+  convergence time) and, for PL, a leading
   "Raw" row per file. This is the batch/archival table.
 
 Both report Intensity — the fitted curve's maximum, via
@@ -53,12 +54,24 @@ def _peak_row(filename: str, spectrum, peak) -> dict:
 
 
 def _provenance(spectrum) -> dict:
-    """Master-CSV-only columns recording how the spectrum was processed."""
+    """Master-CSV-only columns recording how the spectrum was processed.
+
+    Laser_Line_cm1 is where the file's laser line was found on the axis as
+    read, blank when none was (or the file was never checked, or is PL);
+    Axis_Shift_cm1 is what was added to the axis before fitting — 0 when the
+    line was found but not applied. Without them a corrected and an
+    uncorrected export cannot be told apart, and they differ by up to 4 cm⁻¹.
+    """
+    calibration = getattr(spectrum, "laser_calibration", None)
     return {
         "Auto_Detected": spectrum.auto_detected,
         "X_Range_Limited": spectrum.x_range_enabled,
         "X_Min": spectrum.x_min if spectrum.x_range_enabled else "",
         "X_Max": spectrum.x_max if spectrum.x_range_enabled else "",
+        "Laser_Line_cm1": (calibration.laser_line
+                           if calibration is not None and calibration.laser_line is not None
+                           else ""),
+        "Axis_Shift_cm1": calibration.shift if calibration is not None else "",
     }
 
 
@@ -136,6 +149,7 @@ def export_master_csv(files: Dict) -> str:
     # Raw row and peak rows build their dicts in different orders.
     column_order = [
         "Filename", "Mode", "Auto_Detected", "X_Range_Limited", "X_Min", "X_Max",
+        "Laser_Line_cm1", "Axis_Shift_cm1",
         *_PEAK_COLUMNS, "Convergence_Time_s",
     ]
     return pd.DataFrame(rows)[column_order].to_csv(index=False)

@@ -67,9 +67,11 @@ from core.io.export import export_figure_png, prompt_save_path
 from core.io.folder_picker import prompt_folder_path
 from core.io.om_calibration import get_um_per_px, load_om_calibration
 from core.io.report_settings import (
+    load_correct_raman_axis,
     load_default_material,
     load_measure_domain_size,
     load_split_size_populations,
+    save_correct_raman_axis,
     save_default_material,
     save_measure_domain_size,
     save_split_size_populations,
@@ -100,6 +102,7 @@ from modules.optical.viz.domain_grid import build_domain_grid_figure
 from modules.optical.viz.om_grid import build_om_grid_figure
 from modules.spectra.io.preset_store import load_presets
 from modules.spectra.io.results_excel import TechniqueResults, build_sample_results_xlsx
+from modules.spectra.processing.axis_calibration import DEADBAND as AXIS_DEADBAND, axis_note
 from modules.spectra.processing.parser import count_spectra
 from modules.spectra.processing.peak_metrics import (
     NEAR_ZERO_FRACTION,
@@ -109,6 +112,7 @@ from modules.spectra.processing.peak_metrics import (
     aggregate_raw_peak_stats,
     compute_peak_intensity_ratio,
     filter_fits_by_quality,
+    raw_peak_stats,
 )
 from modules.spectra.processing.sample_batch import run_sample_batch
 from modules.spectra.processing.sample_scanner import default_magnification, scan_sample_folder
@@ -377,10 +381,24 @@ if scan is not None:
                     f"**Material Presets** page."
                 )
 
+        # Persisted, and the same setting the Spectra page's loader reads, so
+        # one map is never fitted on two axes depending on the page.
+        correct_raman_axis = st.checkbox(
+            "Correct Raman axis to laser line",
+            value=load_correct_raman_axis(),
+            help="Shift each Raman map so its laser line sits at 0 cm⁻¹ before "
+                 "fitting. The line is measured and reported either way; offsets "
+                 f"under {AXIS_DEADBAND:g} cm⁻¹ are not applied.",
+        )
+        if correct_raman_axis != load_correct_raman_axis():
+            save_correct_raman_axis(correct_raman_axis)
+
         # Drop only what a preset edit invalidates. Editing a Raman peak must
         # not discard a 30-second OM segmentation, and vice versa.
         _optical_now = optical_fingerprint(selected, reference)
-        _raman_now = technique_fingerprint(selected, "Raman")
+        # The axis setting is part of what produced the Raman fits: flipping
+        # it moves every centre, so it invalidates them like a preset edit.
+        _raman_now = (technique_fingerprint(selected, "Raman"), correct_raman_axis)
         _pl_now = technique_fingerprint(selected, "PL")
         if state.get("om_png") and state.get("optical_fingerprint") != _optical_now:
             reset_optical_results(state)
@@ -654,6 +672,7 @@ if scan is not None:
                                 "PL": len(scan.pl_files) if will_fit_pl else 0,
                             },
                         ) if has_spectra else None,
+                        correct_raman_axis=correct_raman_axis,
                     )
                     if has_spectra:
                         progress.complete("fit")
@@ -822,13 +841,28 @@ if scan is not None:
                             [s for _, s in batch_result.pl_spectra]
                         )
                         state["pl_stats"] = ([raw_stat] + pl_stats) if raw_stat else pl_stats
-                    if pl_pairs:
+                    # The figure's first column: every spectrum's fit-free
+                    # maximum, the per-spectrum values behind the Raw row above
+                    # — not gated on R², exactly as that row isn't.
+                    pl_raw = [
+                        (point, raw_peak_stats(s.processed_data.X, s.processed_data.Y))
+                        for point, s in batch_result.pl_spectra
+                    ]
+                    pl_raw = [(point, stats) for point, stats in pl_raw if stats is not None]
+                    if pl_pairs or pl_raw:
                         state["pl_stats_png"] = build_peak_quality_figure(
                             pl_pairs, sample_name=scan.sample_name,
                             material_name=state["material"], spec=PL_QUALITY,
+                            raw_by_point=pl_raw,
                         )
 
                     # ------------------------------------- Summary + workbook
+                    # One line, written on both the summary page and the
+                    # workbook, saying which axis the Raman centres are on.
+                    raman_axis_note = axis_note([
+                        batch_result.raman_calibrations[point]
+                        for point in sorted(batch_result.raman_calibrations)
+                    ])
                     progress.start("compose", detail="summary page")
                     state["summary_png"] = build_summary_figure(
                         sample_name=scan.sample_name,
@@ -855,6 +889,7 @@ if scan is not None:
                             if state["measure_domain_size"] else None
                         ),
                         show_fwhm_v1=show_fwhm_v1,
+                        raman_axis_note=raman_axis_note,
                     )
 
                     # Built from the very stats the summary page was built from,
@@ -870,6 +905,8 @@ if scan is not None:
                             source_files=scan.raman_files,
                             errors=batch_result.raman_errors,
                             ratios=state["raman_ratios"] or (),
+                            axis_note=raman_axis_note,
+                            axis_columns=True,
                         ))
                     if batch_result.pl_spectra:
                         techniques.append(TechniqueResults(

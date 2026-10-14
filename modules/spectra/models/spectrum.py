@@ -176,6 +176,39 @@ class ProcessingSettings:
         return cls(**data)
 
 
+@dataclass(frozen=True)
+class LaserCalibration:
+    """What the Raman axis calibration found in one file and did about it.
+
+    See `processing.axis_calibration`. `laser_line` is the fitted laser-line
+    position on the axis as read, None when no believable line was found.
+    `shift` is what was added to X: minus `laser_line` when applied, else 0.0.
+    Recorded whether or not it was applied, so drift shows as a number.
+
+    `from_session` marks a shift taken from the other files of the same load
+    (their median line) because this file had no line of its own, or one that
+    disagreed with theirs; `shift` is then not minus `laser_line`.
+    """
+
+    laser_line: Optional[float]
+    fwhm: Optional[float]
+    shift: float
+    from_session: bool = False
+
+    @property
+    def applied(self) -> bool:
+        return self.shift != 0.0
+
+    def to_dict(self) -> dict:
+        return {"laser_line": self.laser_line, "fwhm": self.fwhm, "shift": self.shift,
+                "from_session": self.from_session}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LaserCalibration":
+        return cls(data.get("laser_line"), data.get("fwhm"), float(data.get("shift", 0.0)),
+                   bool(data.get("from_session", False)))
+
+
 @dataclass
 class SpectrumFile:
     """
@@ -228,6 +261,11 @@ class SpectrumFile:
         it was separated from: the de-spiked data is `processed_data.Y +
         background`. None until a baseline is applied, and cleared by anything
         that replaces `processed_data` with a series it doesn't describe.
+    laser_calibration : Optional[LaserCalibration]
+        Raman only (Local 5.7.2): the laser-line fit of the file this spectrum
+        came from, and the shift already applied to `original_data`'s X.
+        Shared by every spectrum of one map. None for PL, and for spectra
+        loaded before the calibration existed.
     """
 
     filename: str
@@ -250,6 +288,7 @@ class SpectrumFile:
     fit_stale: bool = False
     last_preprocessing_hash: Optional[str] = None
     background: Optional[np.ndarray] = None  # v5.13.0: the subtracted baseline
+    laser_calibration: Optional[LaserCalibration] = None  # Local 5.7.2
 
     def __post_init__(self):
         """Validate attributes."""
@@ -329,7 +368,9 @@ class SpectrumFile:
             "baseline_done": self.baseline_done,
             "fit_done": self.fit_done,
             "fit_stale": self.fit_stale,
-            "last_preprocessing_hash": self.last_preprocessing_hash
+            "last_preprocessing_hash": self.last_preprocessing_hash,
+            "laser_calibration": (self.laser_calibration.to_dict()
+                                  if self.laser_calibration is not None else None),
         }
 
         if include_arrays:
@@ -388,4 +429,7 @@ class SpectrumFile:
             # baseline-corrected until re-run.
             background=(np.array(data["background"], dtype=np.float64)
                         if data.get("background") is not None else None),
+            # Local 5.7.2: earlier projects never checked their axis.
+            laser_calibration=(LaserCalibration.from_dict(data["laser_calibration"])
+                               if data.get("laser_calibration") else None),
         )

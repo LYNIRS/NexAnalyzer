@@ -116,6 +116,8 @@ nexanalyzer/
 │   ├── optical/                    # Optical microscopy: contrast-based layer classification
 │   │   ├── processing/contrast.py  # The vendored segmentation (see OM_Contrast_Algo.md),
 │   │   │                           # plus class_summary/contrast_summary across frames
+│   │   ├── processing/scale_bar.py # µm/px from a burned-in scale bar (Local 5.7.6): bar
+│   │   │                           # detection, label reading, rescale to native pixels
 │   │   ├── io/frame_tables.py      # The segmentation's numbers as rows: per-class stats and
 │   │   │                           # the per-frame rows behind them
 │   │   ├── ui/qc_report_state.py   # Isolated session-state namespace for the QC Report
@@ -264,7 +266,8 @@ hyperspectral files.
 class SpectrumFile:
     filename: str                            # Original filename
     mode: Literal["Raman", "PL"]             # Spectroscopy mode
-    original_data: SpectrumData              # True original (never modified)
+    original_data: SpectrumData              # As loaded (never modified after; Raman X
+                                             # already laser-corrected, see laser_calibration)
     raw_data: SpectrumData                   # After X-range cropping
     processed_data: SpectrumData             # After despike + baseline
     source_dir: Optional[str] = None         # Folder the file was loaded from (v2.7+)
@@ -281,8 +284,27 @@ class SpectrumFile:
     fit_done: bool = False
     fit_stale: bool = False                  # True if preprocessing changed since last fit
     last_preprocessing_hash: Optional[str] = None
+    background: Optional[np.ndarray] = None  # The subtracted baseline (v5.13.0)
+    laser_calibration: Optional[LaserCalibration] = None  # Raman only (Local 5.7.2)
 ```
 See `src/models/spectrum.py` for the authoritative field list and validation rules.
+
+**Raman axis calibration (Local 5.7.2).** A Raman map is shifted so its laser
+line sits at 0 cm⁻¹ *as it is loaded*, before it becomes a `SpectrumFile`, by
+`processing/axis_calibration.calibrate_raman_spectra` — called from both load
+paths (the Spectra sidebar and `sample_batch`). The shift goes into
+`original_data`, so `reset_to_raw()`, X-range cropping, the preset's window and
+every fit see the corrected axis; centres are never shifted after fitting. One
+fit per file on the averaged map; offsets under 0.3 cm⁻¹ are measured but not
+applied; a line that fails the plausibility checks leaves the axis as read.
+Files loaded together are one session (`calibrate_raman_session`): a file with
+no line of its own, or one off the others' median by > 0.5 cm⁻¹, takes that
+median (`from_session`) when a majority of the files agree.
+`LaserCalibration` (laser_line, fwhm, shift) is recorded either way and
+exported as `Laser_Line_cm1` / `Axis_Shift_cm1`. The switch is
+`report_settings.correct_raman_axis`, default on, shared by both pages; on the
+QC Report it is part of the Raman fingerprint, so flipping it marks the Raman
+results stale.
 
 ### ProcessingSettings
 ```python

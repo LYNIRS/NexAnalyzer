@@ -5,7 +5,8 @@ Each figure is a grid whose columns are metric families (FWHM, peak centres,
 diagnostic ratios) and whose rows are the peaks within each family. Every panel
 is a strip plot across the sample's grid positions: the individual fits as a
 jittered cloud, a mean-or-median +/- std marker per position, and the pooled
-median as a dashed line.
+median as a dashed line. Under the median, the legend gives the pooled robust
+CV, (IQR / 1.349) / |median| (`peak_metrics.robust_cv`), over the same values.
 
 One builder, two techniques, because the drawing never knew anything about
 Raman: it reads `peak.label`, `peak.center`, `peak.width_fwhm` and
@@ -22,13 +23,22 @@ data, and there are only four in the whole lineage:
     Raman  E2g+A1g FWHM = 7      B2g centre = 308     LA/E2g+A1g = 0.13
     PL     Exciton & Trion FWHM = 35
 
+The B2g centre lost its panel to a summary table at Local 5.7.1 and has it back
+since Local 5.7.5, with its 308 line, above the B2g ratio; the table is gone.
+
 There is deliberately **no PL centre spec and no PL ratio spec**. The ancestor
 gates its only PL reference line on `if col == "FWHM"`, so the centre panels
 never had one, and the 755/780 nm figures in the material preset are fit
 *initialisation* guesses — promoting those to specs would invent a tolerance
-nobody measured. The unity line the ancestor draws on the PL ratio is grey
-dotted with no legend entry and is never called a spec, unlike every line it
-does label "(Spec)"; it is left out for the same reason.
+nobody measured. The 35 nm FWHM spec is the fitted Exciton/Trion's; the Raw
+FWHM panel does not carry it (the raw width spans both and runs wider).
+
+**PL's first column is the raw spectrum** (Local 5.7.4): the fit-free maximum's
+FWHM and centre, the same measurement the summary page's and the workbook's
+"Raw" rows report, passed in as `raw_by_point` because it is not a fit. It
+replaced the Exciton/Trion intensity ratio, which was the PL figure's only
+ratio. Raw values go through PL's cleaning in a pass of their own, so adding
+them cannot move which fitted peaks survive.
 
 Anyone adding a pass/fail verdict needs to decide first what the rule is
 (pooled median across the line? any position's mean? a fraction of individual
@@ -61,10 +71,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib import gridspec  # noqa: E402
 
+from core.report.models import RAW_STAT_LABEL  # noqa: E402
+
 from ..models.peak import FitResult  # noqa: E402
 from ..processing.peak_metrics import (  # noqa: E402
     NEAR_ZERO_FRACTION,
     RAMAN_RATIO_PAIRS,
+    RawPeakStats,
+    format_robust_cv,
     iqr_mask,
     peak_intensity,
 )
@@ -117,7 +131,8 @@ class RatioPanel:
 
 
 Panel = Union[PeakPanel, RatioPanel]
-PanelColumns = Tuple[Tuple[str, Tuple[Panel, ...]], ...]
+Cell = Panel
+PanelColumns = Tuple[Tuple[str, Tuple[Cell, ...]], ...]
 
 
 @dataclass(frozen=True)
@@ -172,12 +187,12 @@ PL_CLEANING = CleaningRule(
 #: How each known Raman ratio is *labelled*: (ylabel, caption, spec). Which
 #: ratios exist is not decided here — `peak_metrics.RAMAN_RATIO_PAIRS` decides
 #: that, and this module reads it. Splitting it that way is the point: the
-#: summary table and this figure must draw the same set of ratios, and an entry
-#: added to the constant that nobody labels still gets a panel (below) rather
-#: than silently going missing from the figure while appearing in the table.
+#: summary page's Raman table and this figure must draw the same set of ratios,
+#: and an entry added to the constant that nobody labels still gets a panel
+#: (below) rather than silently going missing from the figure.
 _RAMAN_RATIO_PRESENTATION = {
     ("LA", "E2g+A1g"): ("I(LA) / I(E₂g+A₁g)", "Defect ratio", 0.13),
-    ("C", "LB"): ("I(C) / I(LB)", "Stacking ratio", None),
+    ("B2g", "E2g+A1g"): ("I(B₂g) / I(E₂g+A₁g)", "B₂g ratio", None),
 }
 
 
@@ -195,32 +210,46 @@ def _raman_ratio_panels(
     return tuple(panels)
 
 
-#: Raman's panels. Column order and titles match the inherited script so the
-#: output is recognisable to people already reading these reports.
+_RAMAN_FWHM = PeakPanel("E2g+A1g", "fwhm", "FWHM (cm⁻¹)", "E₂g + A₁g", spec=7.0)
+_RAMAN_2LA_FWHM = PeakPanel("2LA", "fwhm", "FWHM (cm⁻¹)", "2LA(M)")
+_RAMAN_CENTER = PeakPanel("E2g+A1g", "center", "Raman shift (cm⁻¹)", "E₂g + A₁g center")
+_RAMAN_B2G_CENTER = PeakPanel("B2g", "center", "Raman shift (cm⁻¹)", "B₂g center", spec=308.0)
+
+_RAMAN_RATIOS = _raman_ratio_panels()
+#: The defect ratio sits under the centre panel; every other ratio in
+#: `RAMAN_RATIO_PAIRS` goes in the right-hand column under the B2g centre, so a
+#: pair added to the constant still gets a panel there rather than going missing.
+_DEFECT_RATIO = next(
+    (p for p in _RAMAN_RATIOS if (p.numerator, p.denominator) == ("LA", "E2g+A1g")),
+    None,
+)
+_OTHER_RATIOS = tuple(p for p in _RAMAN_RATIOS if p is not _DEFECT_RATIO)
+
+#: Raman's panels, three columns of two so the canvas keeps the 22x11 it has
+#: always had. Local 5.7.1 moved the defect ratio under the centre panel and
+#: gave the right-hand column to the B2g ratio over a summary table; Local 5.7.5
+#: dropped the table and put the B2g centre back on top, the B2g ratio under it.
 PANEL_COLUMNS: PanelColumns = (
-    ("FWHM", (
-        PeakPanel("E2g+A1g", "fwhm", "FWHM (cm⁻¹)", "E₂g + A₁g", spec=7.0),
-        PeakPanel("2LA", "fwhm", "FWHM (cm⁻¹)", "2LA(M)"),
-    )),
-    ("Peak Centers", (
-        PeakPanel("E2g+A1g", "center", "Raman shift (cm⁻¹)", "E₂g + A₁g center"),
-        PeakPanel("B2g", "center", "Raman shift (cm⁻¹)", "B₂g center", spec=308.0),
-    )),
-    ("Diagnostic Ratios", _raman_ratio_panels()),
+    ("FWHM", (_RAMAN_FWHM, _RAMAN_2LA_FWHM)),
+    ("Center & Defect Ratio",
+     (_RAMAN_CENTER,) + ((_DEFECT_RATIO,) if _DEFECT_RATIO else ())),
+    ("B₂g Center & Ratio", (_RAMAN_B2G_CENTER,) + _OTHER_RATIOS),
 )
 
-#: PL's panels. Two peaks, so the ratio column holds one panel where the others
-#: hold two and the bottom-right cell stays empty. That gap is honest: the
-#: lineage defines exactly one PL ratio, and filling the slot would mean either
-#: inventing a second or moving an amplitude panel into a column titled
-#: "Diagnostic Ratios". Amplitude is uncalibrated peak height, sensitive to
-#: laser power and focus, and carries no reference line — the least diagnostic
-#: of the three families the ancestor plots.
-#:
-#: The column titles are Raman's, not the ancestor's: the two figures are read
-#: side by side in one report, and matching headers are worth more than
-#: fidelity to strings the PL script never needed to write down.
+#: PL's raw-spectrum column: the fit-free maximum's FWHM and centre, fed by
+#: `build_peak_quality_figure(raw_by_point=...)`. No spec line — the 35 nm is
+#: the fitted peaks', and the raw width spans exciton and trion together.
+PL_RAW_COLUMN: Tuple[str, Tuple[Cell, ...]] = ("Raw Spectrum", (
+    PeakPanel(RAW_STAT_LABEL, "fwhm", "FWHM (nm)", "Raw FWHM"),
+    PeakPanel(RAW_STAT_LABEL, "center", "Wavelength (nm)", "Raw center"),
+))
+
+#: PL's panels: the raw spectrum first, then the fitted peaks' FWHM and centre
+#: columns. Three columns of two, the same 22x11 canvas as Raman's. Until
+#: Local 5.7.4 the third column was the Exciton/Trion intensity ratio, one
+#: panel over an empty cell; the raw column replaced it.
 PL_PANEL_COLUMNS: PanelColumns = (
+    PL_RAW_COLUMN,
     ("FWHM", (
         PeakPanel("Exciton", "fwhm", "FWHM (nm)", "Exciton", spec=35.0),
         PeakPanel("Trion", "fwhm", "FWHM (nm)", "Trion", spec=35.0),
@@ -229,10 +258,14 @@ PL_PANEL_COLUMNS: PanelColumns = (
         PeakPanel("Exciton", "center", "Wavelength (nm)", "Exciton center"),
         PeakPanel("Trion", "center", "Wavelength (nm)", "Trion center"),
     )),
-    ("Diagnostic Ratios", (
-        RatioPanel("Exciton", "Trion", "I(Exciton) / I(Trion)", "Exciton / Trion"),
-    )),
 )
+
+
+def _is_raw_column(column: Tuple[str, Tuple[Cell, ...]]) -> bool:
+    _title, panels = column
+    return bool(panels) and all(
+        isinstance(p, PeakPanel) and p.peak == RAW_STAT_LABEL for p in panels
+    )
 
 
 #: Axis labels per technique, for panels built from a material's own peaks
@@ -301,7 +334,14 @@ class QualityFigureSpec:
         # would put A1g first and read as wrong to anyone who knows the
         # spectrum.
         present = dict.fromkeys(labels)
-        for _, panels in self.columns:
+        # The raw column is not a fitted peak, so it neither keeps the
+        # inherited columns nor is lost when they fall back: every material's
+        # spectrum has a maximum.
+        raw_columns = tuple(col for col in self.columns if _is_raw_column(col))
+        for column in self.columns:
+            if column in raw_columns:
+                continue
+            _, panels = column
             for panel in panels:
                 named = (
                     (panel.numerator, panel.denominator)
@@ -312,7 +352,7 @@ class QualityFigureSpec:
                     return self.columns
         if not present:
             return self.columns
-        return panels_for_labels(tuple(present), self.technique)
+        return raw_columns + panels_for_labels(tuple(present), self.technique)
 
 
 RAMAN_QUALITY = QualityFigureSpec("Raman", PANEL_COLUMNS, RAMAN_CLEANING, "mean")
@@ -349,6 +389,23 @@ def _records(fits_by_point: Sequence[Tuple[int, FitResult]]) -> List[_PeakRecord
                 intensity=peak_intensity(peak),
             ))
     return out
+
+
+def _raw_records(raw_by_point: Sequence[Tuple[int, RawPeakStats]],
+                 first_index: int) -> List[_PeakRecord]:
+    """One `RAW_STAT_LABEL` record per spectrum's fit-free maximum.
+
+    Spectrum indices start at `first_index`, past the fits', so a raw record
+    never shares a spectrum with a fitted peak. A spectrum whose width could
+    not be measured (flat or non-positive) has no record at all: its "maximum"
+    is then any point of the noise, and its centre means nothing either.
+    """
+    return [
+        _PeakRecord(point=point, spectrum=first_index + index, label=RAW_STAT_LABEL,
+                    center=stats.center, fwhm=stats.fwhm, intensity=stats.intensity)
+        for index, (point, stats) in enumerate(raw_by_point)
+        if stats is not None and stats.fwhm is not None
+    ]
 
 
 def _clean(records: Sequence[_PeakRecord], rule: CleaningRule) -> List[_PeakRecord]:
@@ -453,9 +510,14 @@ def _draw_panel(ax, by_point: Dict[int, np.ndarray], positions: Sequence[int],
         median = float(np.median(pooled))
         ax.axhline(median, color="black", linestyle="--", linewidth=1.3,
                    alpha=0.8, zorder=2, label=f"Median = {median:.2f}")
-        ax.legend(loc="upper right", fontsize=_FS_REFTEXT, framealpha=0.85)
+        # Second legend line, under the median and over the same pooled values:
+        # an empty, unmarked artist so the entry is text only.
+        ax.plot([], [], linestyle="none", label=format_robust_cv(np.asarray(pooled)))
+        ax.legend(loc="upper right", fontsize=_FS_REFTEXT, framealpha=0.85,
+                  handlelength=1.6)
     else:
-        ax.text(0.5, 0.5, f"no {getattr(panel, 'peak', 'data')} fits",
+        peak = getattr(panel, "peak", "data")
+        ax.text(0.5, 0.5, "no raw values" if peak == RAW_STAT_LABEL else f"no {peak} fits",
                 transform=ax.transAxes, ha="center", va="center",
                 fontsize=_FS_LABEL, color="#999999")
 
@@ -481,12 +543,19 @@ def _draw_panel(ax, by_point: Dict[int, np.ndarray], positions: Sequence[int],
         ax.tick_params(labelbottom=False)
 
 
+def _panel_values(records: Sequence[_PeakRecord], panel: Panel) -> Dict[int, np.ndarray]:
+    if isinstance(panel, RatioPanel):
+        return _ratio_values(records, panel)
+    return _peak_values(records, panel)
+
+
 def build_peak_quality_figure(
     fits_by_point: Sequence[Tuple[int, FitResult]],
     sample_name: str,
     material_name: str = "WSe₂",
     spec: QualityFigureSpec = RAMAN_QUALITY,
     dpi: int = 160,
+    raw_by_point: Sequence[Tuple[int, RawPeakStats]] = (),
 ) -> bytes:
     """
     Render one technique's quality figure and return it as PNG bytes.
@@ -503,14 +572,23 @@ def build_peak_quality_figure(
     them — so a column with fewer panels than its neighbours simply leaves its
     bottom cell empty rather than having its last panel silently dropped.
 
+    `raw_by_point` is `(position, RawPeakStats)` per spectrum — every spectrum,
+    not only those whose fit passed the R-squared gate, as the report's Raw rows
+    are — and feeds panels addressing `RAW_STAT_LABEL`. It is cleaned by the
+    same rule as the fits but separately, so the raw maximum never becomes a
+    spectrum's "strongest peak" for the near-zero floor and cannot change which
+    fitted peaks are drawn.
+
     Returns bytes rather than a Figure so a caller cannot leak the canvas.
     """
-    if not fits_by_point:
+    if not fits_by_point and not raw_by_point:
         raise ValueError("build_peak_quality_figure needs at least one fit")
     if not spec.columns:
         raise ValueError("build_peak_quality_figure needs at least one panel column")
 
-    records = _clean(_records(fits_by_point), spec.cleaning)
+    records = _clean(_records(fits_by_point), spec.cleaning) + _clean(
+        _raw_records(raw_by_point, first_index=len(fits_by_point)), spec.cleaning
+    )
 
     # Resolved from the fits, not from `spec`: a material whose peaks the
     # inherited columns never name gets columns built from its own. Taken
@@ -526,8 +604,11 @@ def build_peak_quality_figure(
     # whose every fit was cleaned away keeps its tick and shows as a gap, which
     # is the thing worth seeing. Dropping it would close the gap and make nine
     # positions look like eight.
-    positions = sorted({point for point, _ in fits_by_point})
-    spectra = len(fits_by_point)
+    positions = sorted({point for point, _ in fits_by_point}
+                       | {point for point, _ in raw_by_point})
+    # Raw has one entry per spectrum measured; the fits only those that passed
+    # the gate. The title counts what was measured.
+    spectra = max(len(fits_by_point), len(raw_by_point))
 
     n_cols = len(columns)
     n_rows = max(len(panels) for _, panels in columns)
@@ -543,11 +624,7 @@ def build_peak_quality_figure(
                 if top is None:
                     top = ax
                     ax.set_title(title, fontsize=_FS_TITLE, fontweight="bold", pad=10)
-                values = (
-                    _ratio_values(records, panel)
-                    if isinstance(panel, RatioPanel)
-                    else _peak_values(records, panel)
-                )
+                values = _panel_values(records, panel)
                 # Seeded per panel rather than once for the figure: the
                 # inherited script draws jitter from one module-level generator
                 # consumed in panel order, so inserting or reordering a panel
@@ -555,7 +632,7 @@ def build_peak_quality_figure(
                 # row count, so seeds stay distinct at any grid shape.
                 _draw_panel(
                     ax, values, positions, panel,
-                    is_bottom=(row == len(panels) - 1),
+                    is_bottom=(panel is panels[-1]),
                     rng=np.random.default_rng(42 + column * n_rows + row),
                     statistic=spec.statistic,
                     per_position_iqr=spec.cleaning.per_position_iqr,

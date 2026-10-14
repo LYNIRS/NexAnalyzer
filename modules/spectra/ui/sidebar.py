@@ -15,6 +15,12 @@ This module provides the render_sidebar() function that displays, in order:
 import streamlit as st
 from ..models.spectrum import SpectrumFile, ProcessingSettings
 from ..processing.parser import parse_spectrum_multi, detect_mode_from_filename
+from ..processing.axis_calibration import (
+    DEADBAND as AXIS_DEADBAND,
+    axis_note,
+    calibrate_raman_session,
+)
+from core.io.report_settings import load_correct_raman_axis, save_correct_raman_axis
 from core.io.export import (
     export_figure_png,
     export_figure_html,
@@ -628,6 +634,20 @@ def render_sidebar():
     # Load spectra
     st.subheader("Load Spectra")
 
+    # Persisted and shared with the QC Report, so both pages put one file on
+    # one axis. Applied at load: files already in the list keep the axis they
+    # were loaded with.
+    correct_raman_axis = st.checkbox(
+        "Correct Raman axis to laser line",
+        value=load_correct_raman_axis(),
+        help="Shift each Raman file so its laser line sits at 0 cm⁻¹. The line is "
+             "measured either way; offsets under "
+             f"{AXIS_DEADBAND:g} cm⁻¹ are not applied. Takes effect for files "
+             "loaded after the change.",
+    )
+    if correct_raman_axis != load_correct_raman_axis():
+        save_correct_raman_axis(correct_raman_axis)
+
     # Remember the directory of the last picked file for the next dialog's initialdir
     if 'last_picked_dir' not in st.session_state:
         st.session_state['last_picked_dir'] = ""
@@ -699,25 +719,39 @@ print(json.dumps(list(selected_files)))
         loaded_count = 0
         skipped_count = 0
 
+        # Parse everything first, so the Raman files picked together can be
+        # calibrated as one session: they share an offset, and a file whose
+        # own laser line is missing or off takes the others'.
+        loaded = []  # (filename, source_dir, spectra, mode, auto_detected)
         for file_path in files_to_load:
             filename = os.path.basename(file_path)
             source_dir = os.path.dirname(file_path)  # v2.7: remember source folder for exports
-
             try:
                 # Parse spectrum (returns list; len > 1 for multi-Y files)
                 spectra = parse_spectrum_multi(file_path)
+            except Exception as e:
+                st.error(f"❌ Failed to load {filename}: {e}")
+                continue
 
-                # v2.1+ (FR-12): Auto-detect mode from filename
-                detected_mode = detect_mode_from_filename(filename)
+            # v2.1+ (FR-12): Auto-detect mode from filename
+            detected_mode = detect_mode_from_filename(filename)
+            if detected_mode is not None:
+                set_mode(detected_mode)
+            loaded.append((filename, source_dir, spectra, detected_mode or "Raman",
+                           detected_mode is not None))
 
-                if detected_mode is not None:
-                    file_mode = detected_mode
-                    auto_detected = True
-                    set_mode(detected_mode)
-                else:
-                    file_mode = "Raman"
-                    auto_detected = False
+        calibrations = [None] * len(loaded)
+        raman = [i for i, item in enumerate(loaded) if item[3] == "Raman"]
+        if raman:
+            results = calibrate_raman_session([loaded[i][2] for i in raman], correct_raman_axis)
+            for i, (spectra, calibration) in zip(raman, results):
+                loaded[i] = loaded[i][:2] + (spectra,) + loaded[i][3:]
+                calibrations[i] = calibration
 
+        for (filename, source_dir, spectra, file_mode, auto_detected), calibration in zip(
+            loaded, calibrations
+        ):
+            try:
                 # Build per-spectrum entries. For multi-Y files, suffix the
                 # filename with __1, __2, … so each Y column appears as a
                 # separate file entry in the sidebar list.
@@ -738,7 +772,8 @@ print(json.dumps(list(selected_files)))
                         processed_data=spectrum_data,
                         source_dir=source_dir,  # v2.7: folder the .txt came from
                         processing_settings=ProcessingSettings(),
-                        auto_detected=auto_detected
+                        auto_detected=auto_detected,
+                        laser_calibration=calibration,
                     )
                     add_spectrum_file(spectrum_file)
                     loaded_count += 1
@@ -777,6 +812,8 @@ print(json.dumps(list(selected_files)))
         st.caption(
             f"**Range**: {spectrum.raw_data.X.min():.2f} - {spectrum.raw_data.X.max():.2f}"
         )
+        if spectrum.mode == "Raman":
+            st.caption(f"**Axis**: {axis_note([spectrum.laser_calibration]) or 'not checked'}")
 
         # Remove-file / delete-all buttons (side by side)
         col_a, col_b = st.columns(2)

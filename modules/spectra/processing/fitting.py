@@ -18,8 +18,8 @@ from scipy import signal
 from lmfit import Parameters
 from lmfit.models import VoigtModel
 import time
-from typing import List
-from ..models.peak import MAX_PEAKS, PeakDefinition, FittedPeak, FitResult
+from typing import Dict, List
+from ..models.peak import MAX_PEAKS, PeakDefinition, FittedPeak, FitResult, link_errors
 
 
 # FWHM of a unit-sigma Gaussian: 2*sqrt(2*ln 2). The bounds and initial
@@ -87,6 +87,176 @@ def voigt_fwhm_stderr(
         variance += 2.0 * d_sigma * d_gamma * correlation * sigma_stderr * gamma_stderr
 
     return float(np.sqrt(variance)) if variance > 0 else 0.0
+
+
+#: hc in eV·nm: E [eV] = HC_EV_NM / λ [nm]. Used by energy-offset peak links.
+HC_EV_NM = 1239.84193
+
+#: Reference-peak starting points for a linked fit, as fractions of the
+#: reference's centre window. The preset's own start is always tried first.
+LINKED_START_FRACTIONS = (0.125, 0.375, 0.625, 0.875)
+
+
+def linked_center(reference_center: float, energy_offset_meV: float) -> float:
+    """Wavelength (nm) lying `energy_offset_meV` from `reference_center` (nm) in energy."""
+    return HC_EV_NM / (HC_EV_NM / reference_center + energy_offset_meV / 1000.0)
+
+
+def _voigt_height_expr(prefix: str) -> str:
+    """lmfit VoigtModel's own height expression: the component's maximum, i.e. its intensity."""
+    return (f"({prefix}amplitude/(max(1e-15, {prefix}sigma*sqrt(2*pi))))"
+            f"*real(wofz((1j*{prefix}gamma)/(max(1e-15, {prefix}sigma*sqrt(2)))))")
+
+
+def _area_per_height_expr(prefix: str) -> str:
+    """Inverse of `_voigt_height_expr` at fixed widths: area = height × this."""
+    return (f"(max(1e-15, {prefix}sigma*sqrt(2*pi)))"
+            f"/real(wofz((1j*{prefix}gamma)/(max(1e-15, {prefix}sigma*sqrt(2)))))")
+
+
+def _resolve_links(peak_table: List[PeakDefinition], mode: str) -> Dict[int, int]:
+    """Index of each linked peak -> index of its reference. Raises on a bad link."""
+    labels = [p.label for p in peak_table]
+    errors = link_errors(
+        labels,
+        [(p.linked_to, p.energy_offset_meV, p.max_intensity_ratio) for p in peak_table],
+        mode,
+    )
+    if errors:
+        raise ValueError("Invalid peak links: " + "; ".join(errors))
+    return {i: labels.index(p.linked_to) for i, p in enumerate(peak_table) if p.linked_to is not None}
+
+
+def _multi_starts(peak_table: List[PeakDefinition], links: Dict[int, int]) -> List[Dict[int, float]]:
+    """Centre overrides to fit from: just the preset's start unless peaks are linked."""
+    starts = [{}]
+    references = sorted(set(links.values()))
+    for frac in (LINKED_START_FRACTIONS if references else ()):
+        override = {}
+        for j in references:
+            lo, hi = peak_table[j].center_min, peak_table[j].center_max
+            if hi > lo:
+                override[j] = lo + frac * (hi - lo)
+        if override:
+            starts.append(override)
+    return starts
+
+
+def _apply_links(params: Parameters, peak_table: List[PeakDefinition], links: Dict[int, int]) -> None:
+    """
+    Tie each linked peak to its reference with lmfit expressions.
+
+    A constrained parameter is still clipped to its own [min, max], so the
+    linked peak's own centre window and area ceiling are lifted first: its
+    position comes from the reference, and its intensity is bounded by the
+    ratio times the reference's (itself bounded).
+
+    The intensity cap is on the Voigts' analytic heights. The reported
+    intensity (`peak_metrics.peak_intensity`) is each component's maximum on
+    the data grid, so at the cap the reported ratio can exceed it by the grid
+    sampling -- ~1e-5 relative at PL's 0.2 nm steps.
+    """
+    for i, j in links.items():
+        peak, p, ref = peak_table[i], f"p{i}_", f"p{j}_"
+        if peak.energy_offset_meV is not None:
+            params[f"{p}center"].set(min=-np.inf, max=np.inf, vary=True)
+            params[f"{p}center"].set(
+                expr=f"{HC_EV_NM!r}/({HC_EV_NM!r}/{ref}center + {peak.energy_offset_meV / 1000.0!r})")
+        if peak.max_intensity_ratio is not None:
+            cap = float(peak.max_intensity_ratio)
+            params.add(f"{p}intensity_ratio", value=0.5 * cap, min=0.0, max=cap)
+            params[f"{p}amplitude"].set(min=-np.inf, max=np.inf)
+            params[f"{p}amplitude"].set(
+                expr=f"{p}intensity_ratio*{_voigt_height_expr(ref)}*{_area_per_height_expr(p)}")
+
+
+def _constraint_text(index: int, peak: PeakDefinition, params) -> str:
+    """Plain-language statement of a linked peak's constraints, for display."""
+    if peak.linked_to is None:
+        return ""
+    parts = []
+    if peak.energy_offset_meV is not None:
+        sign = "−" if peak.energy_offset_meV < 0 else "+"
+        parts.append(f"E = {peak.linked_to} {sign} {abs(peak.energy_offset_meV):g} meV")
+    if peak.max_intensity_ratio is not None:
+        text = f"I ≤ {peak.max_intensity_ratio:g} × {peak.linked_to}"
+        ratio = params.get(f"p{index}_intensity_ratio")
+        # lmfit leaves a bounded parameter ~1e-5 inside its bound, not on it.
+        if ratio is not None and ratio.value >= peak.max_intensity_ratio * (1 - 1e-4):
+            text += " (at cap)"
+        parts.append(text)
+    return "; ".join(parts)
+
+
+def _build_params(x, y, peak_table, center_starts) -> Parameters:
+    """
+    lmfit parameters for every peak, with bounds and data-derived starts.
+
+    `center_starts` maps a peak's index to a starting centre that replaces the
+    preset's, for the multi-start of a linked fit; an empty dict is the
+    preset's own start for every peak.
+    """
+    params = Parameters()
+
+    for i, peak in enumerate(peak_table):
+        prefix = f"p{i}_"
+        # Convert FWHM to sigma/gamma using shape parameter
+        # Shape: 0 = pure Gaussian, 1 = pure Lorentzian, 0.5 = equal contribution
+        # The split is linear in shape across the whole range; this used to be
+        # written as an if/else on shape < 0.5 whose two arms were identical,
+        # which read as though the halves were treated differently.
+        shape = peak.shape
+        frac_gaussian = 1.0 - shape
+        frac_lorentzian = shape
+
+        # Distribute FWHM according to shape
+        # Gaussian FWHM = 2.355 * sigma, Lorentzian FWHM = 2 * gamma
+        sigma_guess = (peak.width_fwhm * frac_gaussian) / 2.355
+        gamma_guess = (peak.width_fwhm * frac_lorentzian) / 2.0
+
+        # Ensure non-zero values (minimum bounds)
+        sigma_min = peak.width_min / (2 * 2.355)
+        gamma_min = peak.width_min / 4.0
+        sigma_guess = max(sigma_guess, sigma_min)
+        gamma_guess = max(gamma_guess, gamma_min)
+
+        # The starting center must lie inside its own bounds, which it doesn't
+        # when the preset places the peak outside the spectrum's range and
+        # calculate_auto_bounds has pinned it to the edge.
+        start = center_starts.get(i, peak.center)
+        center_guess = min(max(start, peak.center_min), peak.center_max)
+
+        # Auto-estimate the peak intensity from the data at center_guess.
+        # Position + FWHM come from the preset (material properties); intensity
+        # depends on measurement conditions, so we always init from the data.
+        idx = int(np.argmin(np.abs(x - center_guess)))
+        intensity_guess = max(float(y[idx]), 1e-6)
+        fwhm_eff = peak.width_fwhm
+        # lmfit's "amplitude" is the area, so both the guess and the ceiling
+        # convert from intensity: area = intensity x FWHM x 1.064 for a Voigt.
+        area_guess = intensity_guess * fwhm_eff * 1.064
+        area_max = peak.intensity_max * fwhm_eff * 1.064
+
+        # Add parameters with bounds
+        if peak.center_min == peak.center_max:
+            # calculate_auto_bounds pinned it: the preset places this peak
+            # outside the spectrum, so the edge is the only position open to
+            # it. lmfit rejects min == max, so say "fixed" rather than passing
+            # a degenerate range -- and note it swaps min/max silently when
+            # they arrive inverted, which is how an off-range peak used to come
+            # back at a position belonging to neither bound.
+            params.add(f"{prefix}center", value=center_guess, vary=False)
+        else:
+            params.add(f"{prefix}center", value=center_guess,
+                       min=peak.center_min, max=peak.center_max)
+        params.add(f"{prefix}amplitude", value=area_guess,
+                   min=0, max=area_max)
+        params.add(f"{prefix}sigma", value=sigma_guess,
+                   min=peak.width_min / (2 * 2.355), max=peak.width_max / (2 * 2.355))
+        params.add(f"{prefix}gamma", value=gamma_guess,
+                   min=peak.width_min / 4.0, max=peak.width_max / 4.0)
+
+    return params
 
 
 def fit_voigt_peaks(
@@ -165,105 +335,49 @@ def fit_voigt_peaks(
     for peak in peak_table:
         peak.calculate_auto_bounds(mode, x_range, y_max, spectral_resolution)
 
+    links = _resolve_links(peak_table, mode)
+
     # Build composite model (sum of Voigt models)
     composite_model = None
-    params = Parameters()
+    for i in range(len(peak_table)):
+        voigt = VoigtModel(prefix=f"p{i}_")
+        composite_model = voigt if composite_model is None else composite_model + voigt
 
-    for i, peak in enumerate(peak_table):
-        prefix = f"p{i}_"
-        voigt = VoigtModel(prefix=prefix)
-
-        if composite_model is None:
-            composite_model = voigt
-        else:
-            composite_model += voigt
-
-        # Convert FWHM to sigma/gamma using shape parameter
-        # Shape: 0 = pure Gaussian, 1 = pure Lorentzian, 0.5 = equal contribution
-        # The split is linear in shape across the whole range; this used to be
-        # written as an if/else on shape < 0.5 whose two arms were identical,
-        # which read as though the halves were treated differently.
-        shape = peak.shape
-        frac_gaussian = 1.0 - shape
-        frac_lorentzian = shape
-
-        # Distribute FWHM according to shape
-        # Gaussian FWHM = 2.355 * sigma, Lorentzian FWHM = 2 * gamma
-        sigma_guess = (peak.width_fwhm * frac_gaussian) / 2.355
-        gamma_guess = (peak.width_fwhm * frac_lorentzian) / 2.0
-
-        # Ensure non-zero values (minimum bounds)
-        sigma_min = peak.width_min / (2 * 2.355)
-        gamma_min = peak.width_min / 4.0
-        sigma_guess = max(sigma_guess, sigma_min)
-        gamma_guess = max(gamma_guess, gamma_min)
-
-        # The starting center must lie inside its own bounds, which it doesn't
-        # when the preset places the peak outside the spectrum's range and
-        # calculate_auto_bounds has pinned it to the edge.
-        center_guess = min(max(peak.center, peak.center_min), peak.center_max)
-
-        # Auto-estimate the peak intensity from the data at center_guess.
-        # Position + FWHM come from the preset (material properties); intensity
-        # depends on measurement conditions, so we always init from the data.
-        idx = int(np.argmin(np.abs(x - center_guess)))
-        intensity_guess = max(float(y[idx]), 1e-6)
-        fwhm_eff = peak.width_fwhm
-        # lmfit's "amplitude" is the area, so both the guess and the ceiling
-        # convert from intensity: area = intensity x FWHM x 1.064 for a Voigt.
-        area_guess = intensity_guess * fwhm_eff * 1.064
-        area_max = peak.intensity_max * fwhm_eff * 1.064
-
-        # Add parameters with bounds
-        if peak.center_min == peak.center_max:
-            # calculate_auto_bounds pinned it: the preset places this peak
-            # outside the spectrum, so the edge is the only position open to
-            # it. lmfit rejects min == max, so say "fixed" rather than passing
-            # a degenerate range -- and note it swaps min/max silently when
-            # they arrive inverted, which is how an off-range peak used to come
-            # back at a position belonging to neither bound.
-            params.add(f"{prefix}center", value=center_guess, vary=False)
-        else:
-            params.add(f"{prefix}center", value=center_guess,
-                       min=peak.center_min, max=peak.center_max)
-        params.add(f"{prefix}amplitude", value=area_guess,
-                   min=0, max=area_max)
-        params.add(f"{prefix}sigma", value=sigma_guess,
-                   min=peak.width_min / (2 * 2.355), max=peak.width_max / (2 * 2.355))
-        params.add(f"{prefix}gamma", value=gamma_guess,
-                   min=peak.width_min / 4.0, max=peak.width_max / 4.0)
-
-    # Fit using Levenberg-Marquardt with increased tolerance
+    # Fit using Levenberg-Marquardt with increased tolerance. A linked model
+    # can have more than one minimum -- on a single-line WSe2 PL spectrum the
+    # trion either takes the main line or goes to zero, depending on where the
+    # exciton starts -- so a linked fit is run from several reference starts
+    # and the lowest chi-squared kept. An unlinked fit runs once, as before.
     start_time = time.time()
-
-    try:
-        result = composite_model.fit(
-            y, params, x=x,
-            method='leastsq',
-            max_nfev=max_iterations,
-            fit_kws={'ftol': 1e-6, 'xtol': 1e-6}  # Increased tolerance for stability
-        )
-        convergence_time = time.time() - start_time
+    result = None
+    error_message = ""
+    for center_starts in _multi_starts(peak_table, links):
+        params = _build_params(x, y, peak_table, center_starts)
+        _apply_links(params, peak_table, links)
+        try:
+            trial = composite_model.fit(
+                y, params, x=x,
+                method='leastsq',
+                max_nfev=max_iterations,
+                fit_kws={'ftol': 1e-6, 'xtol': 1e-6}  # Increased tolerance for stability
+            )
+        except Exception as e:
+            error_message = f"Fitting error: {str(e)}"
+            continue
 
         # Accept fit even if error bars couldn't be estimated (common with tight fits)
         # result.success may be False if uncertainties couldn't be calculated, but fit is still valid
-        if not result.success and "Tolerance seems to be too small" not in str(result.message):
-            return FitResult(
-                success=False,
-                fitted_peaks=[],
-                total_fit_curve=np.zeros_like(y),
-                residuals=y.copy(),
-                chi_squared=np.sum(y**2),
-                r_squared=0.0,
-                convergence_time=convergence_time,
-                error_message=(
-                    f"Fitting failed to converge ({result.message}). "
-                    f"Try adjusting initial guesses or reducing number of peaks."
-                )
+        if not trial.success and "Tolerance seems to be too small" not in str(trial.message):
+            error_message = (
+                f"Fitting failed to converge ({trial.message}). "
+                f"Try adjusting initial guesses or reducing number of peaks."
             )
+            continue
+        if result is None or trial.chisqr < result.chisqr:
+            result = trial
+    convergence_time = time.time() - start_time
 
-    except Exception as e:
-        convergence_time = time.time() - start_time
+    if result is None:
         return FitResult(
             success=False,
             fitted_peaks=[],
@@ -272,7 +386,7 @@ def fit_voigt_peaks(
             chi_squared=np.sum(y**2),
             r_squared=0.0,
             convergence_time=convergence_time,
-            error_message=f"Fitting error: {str(e)}"
+            error_message=error_message,
         )
 
     # Extract fitted parameters
@@ -356,6 +470,7 @@ def fit_voigt_peaks(
             component_curve=component_curve,
             color=peak.color,  # Copy color from PeakDefinition
             width_fwhm_v1=width_fwhm_v1_fit,
+            constraint=_constraint_text(i, peak, result.params),
         ))
 
     # Calculate quality metrics

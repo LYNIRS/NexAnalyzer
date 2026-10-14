@@ -8,12 +8,74 @@ This module defines:
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Sequence
 import numpy as np
 
 #: Most peaks one fit may carry -- the preset block, the fit and its result all
 #: check against this. Raised from 10 at v5.9.0 for `WSe2 extended` (20 peaks).
 MAX_PEAKS = 20
+
+
+def link_errors(
+    labels: Sequence[str],
+    links: Sequence[tuple],
+    mode: Optional[str] = None,
+) -> List[str]:
+    """
+    What is wrong with a set of peak links (empty list if nothing).
+
+    A peak may be *linked* to one other peak of the same fit, its reference,
+    named by label. The link carries up to two rules, applied by
+    `fitting.fit_voigt_peaks`:
+
+    - `energy_offset_meV`: the peak's centre is the reference's centre moved by
+      that many meV, through E = hc/λ -- negative means lower energy (longer
+      wavelength). Defined on a wavelength axis, so PL only.
+    - `max_intensity_ratio`: the peak's intensity (its maximum, as everywhere
+      in this app) is at most that multiple of the reference's.
+
+    One check for both callers -- `TechniquePreset.validate` and the fitter --
+    so a preset the editor accepts is one the fitter will run.
+
+    Parameters
+    ----------
+    labels : sequence of str
+        Every peak's label, in fit order.
+    links : sequence of (linked_to, energy_offset_meV, max_intensity_ratio)
+        One tuple per peak, aligned with `labels`; all three None when unlinked.
+    mode : str, optional
+        "Raman" or "PL". When given, an energy offset outside PL is reported.
+    """
+    errors = []
+    for label, (target, offset, ratio) in zip(labels, links):
+        name = f"'{label}'"
+        if target is None:
+            if offset is not None or ratio is not None:
+                errors.append(f"{name}: ΔE and max intensity ratio need 'linked to' a reference peak")
+            continue
+        if target == label:
+            errors.append(f"{name} cannot be linked to itself")
+            continue
+        matches = [i for i, other in enumerate(labels) if other == target]
+        if len(matches) != 1:
+            errors.append(
+                f"{name} is linked to '{target}', which must be the label of exactly "
+                f"one other peak (found {len(matches)})"
+            )
+            continue
+        if links[matches[0]][0] is not None:
+            # One level only: a chain would let a peak's position drift through
+            # two offsets, and a cycle would have nothing free at all.
+            errors.append(f"{name} is linked to '{target}', which is itself linked; link to a free peak")
+        if offset is None and ratio is None:
+            errors.append(f"{name} is linked to '{target}' but sets neither ΔE nor max intensity ratio")
+        if offset is not None and (not np.isfinite(offset) or offset == 0):
+            errors.append(f"{name}: ΔE must be a non-zero number of meV (got {offset})")
+        if offset is not None and mode is not None and mode != "PL":
+            errors.append(f"{name}: ΔE is an energy offset on a wavelength axis and applies to PL only")
+        if ratio is not None and not (np.isfinite(ratio) and ratio > 0):
+            errors.append(f"{name}: max intensity ratio must be > 0 (got {ratio})")
+    return errors
 
 
 @dataclass
@@ -58,6 +120,16 @@ class PeakDefinition:
         area: `fitting.py` multiplies it by FWHM × 1.064 before handing it to
         lmfit, whose "amplitude" parameter is the integrated area (see
         ``FittedPeak.area``).
+    linked_to : Optional[str]
+        Label of this peak's reference peak, or None for a free peak. See
+        `link_errors` for the rules a link may carry.
+    energy_offset_meV : Optional[float]
+        This peak's energy minus the reference's, in meV (linked peaks only).
+        When set, the centre is computed from the reference and this peak's
+        own `center_tolerance` window is not used.
+    max_intensity_ratio : Optional[float]
+        Ceiling on this peak's intensity as a multiple of the reference's
+        (linked peaks only).
     """
 
     center: float
@@ -72,6 +144,9 @@ class PeakDefinition:
     width_min: Optional[float] = None
     width_max: Optional[float] = None
     intensity_max: Optional[float] = None
+    linked_to: Optional[str] = None
+    energy_offset_meV: Optional[float] = None
+    max_intensity_ratio: Optional[float] = None
 
     def __post_init__(self):
         """Validate attributes."""
@@ -183,7 +258,10 @@ class PeakDefinition:
             "center_max": self.center_max,
             "width_min": self.width_min,
             "width_max": self.width_max,
-            "intensity_max": self.intensity_max
+            "intensity_max": self.intensity_max,
+            "linked_to": self.linked_to,
+            "energy_offset_meV": self.energy_offset_meV,
+            "max_intensity_ratio": self.max_intensity_ratio,
         }
 
     @classmethod
@@ -224,6 +302,11 @@ class FittedPeak:
         This peak's contribution to total fit (same length as X).
     color : str
         Peak color for plotting (hex #RRGGBB), copied from PeakDefinition.
+    constraint : str
+        How a linked peak was tied to its reference, e.g.
+        "E = Exciton − 30 meV; I ≤ 1 × Exciton (at cap)". Empty for a free
+        peak. A centre set by an energy link is computed, not measured, and
+        this is what says so wherever the peak is shown.
     width_fwhm_v1 : Optional[float]
         `2.355 * sigma` -- the Gaussian-only width the app reported before
         v3.4.0, which silently dropped gamma and understated every width by
@@ -245,6 +328,7 @@ class FittedPeak:
     component_curve: np.ndarray
     color: str = "#1f77b4"  # Default color
     width_fwhm_v1: Optional[float] = None
+    constraint: str = ""
 
     def to_dict(self) -> dict:
         """Serialize to dictionary for JSON export."""
@@ -258,7 +342,8 @@ class FittedPeak:
             "width_stderr": self.width_stderr,
             "shape": self.shape,
             "component_curve": self.component_curve.tolist() if self.component_curve is not None else None,
-            "color": self.color
+            "color": self.color,
+            "constraint": self.constraint,
         }
 
     @classmethod
@@ -275,7 +360,8 @@ class FittedPeak:
             width_stderr=data["width_stderr"],
             shape=data["shape"],
             component_curve=component_curve,
-            color=data.get("color", "#1f77b4")  # Default color if not present
+            color=data.get("color", "#1f77b4"),  # Default color if not present
+            constraint=data.get("constraint", ""),
         )
 
 

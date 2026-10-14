@@ -95,3 +95,63 @@ class TestParseExclusionRanges:
     def test_invalid_range_raises(self):
         with pytest.raises(ValueError):
             parse_exclusion_ranges("not-a-range-format-1")
+
+
+class TestPeakLinks:
+    def _linked_block(self, **trion_link):
+        link = dict(linked_to="Exciton", energy_offset_meV=-30.0, max_intensity_ratio=1.0)
+        link.update(trion_link)
+        return TechniquePreset(
+            baseline_algorithm="None (Skip)",
+            peak_templates=[
+                PeakTemplate(peak_label="Exciton", center=755.0, center_tolerance=15.0,
+                             width_fwhm=30.0, shape=0.3, color="#d62728"),
+                PeakTemplate(peak_label="Trion", center=769.0, center_tolerance=15.0,
+                             width_fwhm=40.0, shape=0.3, color="#9467bd", **link),
+            ],
+        )
+
+    def test_an_unlinked_template_serializes_as_before(self):
+        # preset_staleness hashes to_dict(); new keys on every template would
+        # mark every existing fit stale.
+        template = _make_block().peak_templates[0]
+        assert set(template.to_dict()) == {"peak_label", "center", "center_tolerance",
+                                           "width_fwhm", "shape", "color"}
+
+    def test_a_linked_template_round_trips_through_the_store(self, tmp_path):
+        path = tmp_path / "materials.json"
+        preset = MaterialPreset(material_name="WSe2 X-T linked", enabled=True, pl=self._linked_block())
+
+        save_presets({"WSe2 X-T linked": preset}, path=path)
+        trion = load_presets(path=path)["WSe2 X-T linked"].pl.peak_templates[1]
+
+        assert (trion.linked_to, trion.energy_offset_meV, trion.max_intensity_ratio) == ("Exciton", -30.0, 1.0)
+
+    def test_the_link_reaches_the_peak_definition(self):
+        peak_def = self._linked_block().peak_templates[1].to_peak_definition(
+            mode="PL", x_range=(650.0, 880.0), y_max=1000.0, spectral_resolution=0.2)
+        assert (peak_def.linked_to, peak_def.energy_offset_meV, peak_def.max_intensity_ratio) == (
+            "Exciton", -30.0, 1.0)
+
+    def test_a_valid_link_validates(self):
+        assert self._linked_block().validate("PL") == []
+
+    @pytest.mark.parametrize("link, message", [
+        (dict(linked_to="Exiton"), "exactly one other peak"),
+        (dict(linked_to=None), "need 'linked to'"),
+        (dict(energy_offset_meV=None, max_intensity_ratio=None), "sets neither"),
+        (dict(max_intensity_ratio=-1.0), "must be > 0"),
+    ])
+    def test_a_bad_link_is_reported(self, link, message):
+        errors = self._linked_block(**link).validate("PL")
+        assert any(message in e for e in errors), errors
+
+    def test_an_energy_offset_in_a_raman_block_is_reported(self):
+        preset = MaterialPreset(material_name="X", enabled=True, raman=self._linked_block())
+        assert any("PL only" in e for e in preset.validate())
+
+    def test_the_committed_linked_preset_is_valid_and_linked(self):
+        preset = load_presets()["WSe2 X-T linked"]
+        assert preset.validate() == []
+        trion = next(t for t in preset.pl.peak_templates if t.peak_label == "Trion")
+        assert (trion.linked_to, trion.energy_offset_meV, trion.max_intensity_ratio) == ("Exciton", -30.0, 1.0)

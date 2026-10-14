@@ -33,7 +33,7 @@ here (v3.3.0 shipped a report that disagreed with its own CSV).
   *because* lmfit calls it `amplitude`.
 - **Every reporting surface shows intensity** — the on-screen Fit Results table,
   both CSVs, the QC Report's summary tables and quality panels, and the
-  LA/E2g+A1g and C/LB ratios. They agree, and must keep agreeing.
+  LA/E2g+A1g and B2g/E2g+A1g ratios. They agree, and must keep agreeing.
 - The word "amplitude" appears only where lmfit's own parameter is addressed by
   name (`params.add(f"{prefix}amplitude", ...)`). Don't reintroduce it anywhere
   else. Guard tests in
@@ -48,10 +48,11 @@ The full reasoning is in the
 - **`modules/*` may import `core`; `core` never imports `modules`.** See "The one
   rule" in docs/Summary.md.
 - **The diagnostic ratios live in one constant.** `peak_metrics.RAMAN_RATIO_PAIRS`
-  is `LA/E2g+A1g` and `C/LB`. The quality figure and the QC Report's summary
+  is `LA/E2g+A1g` and `B2g/E2g+A1g` (C/LB until Local 5.7.1). The quality figure and the QC Report's summary
   table both read it; don't write the pair out again.
 - **Spec lines are drawn and never evaluated, and there are only four.**
-  `peak_quality` carries Raman's `E2g+A1g` FWHM = 7, `B2g` centre = 308,
+  `peak_quality` carries Raman's `E2g+A1g` FWHM = 7, `B2g` centre = 308
+  (drawn on the B2g centre panel, back since Local 5.7.5),
   `LA/E2g+A1g` = 0.13, and PL's Exciton/Trion FWHM = 35. They are inherited
   literals from the wafer-comparison scripts, not preset data. **PL has no
   centre spec and no ratio spec** — the ancestor gates its only PL reference
@@ -108,6 +109,13 @@ The full reasoning is in the
   types: `is_circular()` decides that per image at runtime, so a preset cannot
   address one of them. `ff_divisor` is a divisor, not a sigma — larger means a
   smaller blur.
+- **The Raman laser-line correction happens at load, never after the fit.**
+  `axis_calibration.calibrate_raman_spectra` shifts a whole map's X before it
+  becomes a `SpectrumFile`, so `original_data` is already corrected and the
+  preset window, bounds, plots and centres all agree. Shifting fitted centres
+  instead would leave the spectra plotted on one axis and the peaks on another.
+  Any new Raman load path must call it, or that path silently reports
+  uncorrected centres.
 - **`core/version.py` is the single source of truth for the version.** Bump it and
   add a CHANGELOG entry in the same change as any user-visible behaviour change;
   note explicitly when numbers don't move (renames) versus when they do.

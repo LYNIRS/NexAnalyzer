@@ -81,6 +81,11 @@ class TechniqueResults(NamedTuple):
     techniques want an empirical row is a reporting decision: PL's broad
     emission is read off the spectrum, Raman's modes are read off the fit.
     The master CSV draws the same line.
+
+    ``axis_note`` is one line saying what happened to the technique's axis
+    (see `axis_calibration.axis_note`), written into the Summary sheet's
+    identity block; ``axis_columns`` adds each point's Laser_Line_cm1 and
+    Axis_Shift_cm1 to the data sheet. Raman sets both; PL has no laser line.
     """
 
     label: str
@@ -90,6 +95,8 @@ class TechniqueResults(NamedTuple):
     errors: Sequence[Tuple[int, str]] = ()
     ratios: Sequence[Tuple[str, RatioSummary]] = ()
     include_raw_row: bool = False
+    axis_note: Optional[str] = None
+    axis_columns: bool = False
 
 
 # One row per fitted peak per point. Mode isn't a column: the sheet name is
@@ -98,7 +105,7 @@ class TechniqueResults(NamedTuple):
 # `show_fwhm_v1` inserts FWHM_v1/FWHM_v1_Stderr right after FWHM/FWHM_Stderr
 # -- the pre-v3.4.0 Gaussian-only width, see FittedPeak.width_fwhm_v1. Off by
 # default: every other reporting surface shows only the correct width.
-def _point_columns(show_fwhm_v1: bool) -> Sequence[_Column]:
+def _point_columns(show_fwhm_v1: bool, axis_columns: bool = False) -> Sequence[_Column]:
     columns = [
         _Column("Point", "0", 7),
         _Column("Source_File", None, 24),
@@ -121,6 +128,12 @@ def _point_columns(show_fwhm_v1: bool) -> Sequence[_Column]:
         _Column("Chi_Squared", "General", 13),
         _Column("Convergence_Time_s", "0.000", 19),
     ]
+    if axis_columns:
+        # Last, so every column a reader already pivots on keeps its letter.
+        columns += [
+            _Column("Laser_Line_cm1", "0.00", 15),
+            _Column("Axis_Shift_cm1", "0.00", 15),
+        ]
     return columns
 
 
@@ -221,6 +234,13 @@ def _point_rows(technique: TechniqueResults, show_fwhm_v1: bool) -> List[list]:
     for point, spectrum in sorted(technique.point_spectra, key=lambda item: item[0]):
         source = os.path.basename(source_files.get(point, "")) or None
         fit = spectrum.fit_result
+        axis_cells = []
+        if technique.axis_columns:
+            calibration = getattr(spectrum, "laser_calibration", None)
+            axis_cells = [
+                calibration.laser_line if calibration is not None else None,
+                calibration.shift if calibration is not None else None,
+            ]
 
         if technique.include_raw_row:
             raw = raw_peak_stats(spectrum.processed_data.X, spectrum.processed_data.Y)
@@ -238,7 +258,7 @@ def _point_rows(technique: TechniqueResults, show_fwhm_v1: bool) -> List[list]:
                     # No fit, so there is no sigma/gamma the v1 formula could
                     # come from.
                     row += [None, None]
-                row += [None, None, None, None]
+                row += [None, None, None, None] + axis_cells
                 rows.append(row)
 
         for peak in (fit.fitted_peaks if fit else []):
@@ -254,6 +274,7 @@ def _point_rows(technique: TechniqueResults, show_fwhm_v1: bool) -> List[list]:
                 # blank rather than fabricated.
                 row += [peak.width_fwhm_v1, None]
             row += [peak.shape, fit.r_squared, fit.chi_squared, fit.convergence_time]
+            row += axis_cells
             rows.append(row)
 
     return rows
@@ -319,7 +340,7 @@ def _add_data_sheet(wb: Workbook, technique: TechniqueResults, show_fwhm_v1: boo
     if not rows:
         return
 
-    columns = _point_columns(show_fwhm_v1)
+    columns = _point_columns(show_fwhm_v1, technique.axis_columns)
     ws = wb.create_sheet(title=technique.label)
     _write_table(ws, columns, rows)
     _set_widths(ws, columns)
@@ -431,11 +452,18 @@ def _add_summary_sheet(
     ws["A1"].font = _TITLE_FONT
 
     row = 3
-    for label, value in (
+    identity = [
         ("Sample", sample_name),
         ("Material", material_name),
         ("Date", report_date),
-    ):
+    ]
+    # Which axis the centres below are on: a corrected and an uncorrected
+    # report of the same map disagree by the whole offset.
+    identity += [
+        (f"{technique.label} axis", technique.axis_note)
+        for technique in techniques if technique.axis_note
+    ]
+    for label, value in identity:
         ws.cell(row=row, column=1, value=label).font = _HEADING_FONT
         ws.cell(row=row, column=2, value=value)
         row += 1
